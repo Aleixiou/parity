@@ -98,7 +98,7 @@ contract. All 17 cases below were verified to agree exactly.
 | INTEGER | `cast(c as varchar)` | `(c)::text` |
 | DECIMAL | `cast(cast(c as decimal(38,6)) as varchar)` | `cast(round((c)::numeric, 6) as text)` |
 | FLOAT | `cast(cast(c as decimal(38,6)) as varchar)` | `cast(round((c)::numeric, 6) as text)` |
-| BOOLEAN | `case when c then 'true' else 'false' end` | `case when c then 'true' else 'false' end` |
+| BOOLEAN | `case when c then 'true' when not c then 'false' end` | `case when c then 'true' when not c then 'false' end` |
 | STRING | `cast(c as varchar)` | `(c)::text` |
 | DATE | `strftime(c, '%Y-%m-%d')` | `to_char(c, 'YYYY-MM-DD')` |
 | TIMESTAMP | `strftime(c, '%Y-%m-%d %H:%M:%S.%f')` | `to_char(c, 'YYYY-MM-DD HH24:MI:SS.US')` |
@@ -117,6 +117,13 @@ exactly how a parity tool loses trust. Make it configurable later
 - NULL renders as the literal sentinel `\N`, never SQL NULL:
   `coalesce(<expr>, '\N')`. An un-coalesced NULL would poison the whole
   concatenation and silently mask differences.
+- **The BOOLEAN expression must use `when not c`, never `else`.** With
+  `case when c then 'true' else 'false' end` a NULL boolean falls into the
+  `else` branch and renders `'false'`, so the `coalesce` never fires and a NULL
+  on one side compares *equal* to a FALSE on the other. Both engines agreed on
+  that wrong answer, so a cross-engine equality test could not see it - it was
+  caught only by a test that planted a NULL-versus-FALSE difference and
+  asserted the tool found it. This is the same bug class as NULL versus `''`.
 - Fields join with `concat_ws(chr(31), ...)` — ASCII Unit Separator, which
   effectively never occurs in warehouse string data and is spelled identically
   in both engines.

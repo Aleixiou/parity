@@ -21,7 +21,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Sequence
 
-from parity.types import Column, LogicalType
+from parity.types import Column, KeyStats, LogicalType
 
 # Field separator inside a row's canonical text. Unit Separator (0x1f) is
 # chosen because it effectively never appears in warehouse string data;
@@ -32,15 +32,35 @@ NULL_SENTINEL = "\\N"
 # Number of MD5 hex characters folded into the row hash. 15 nibbles = 60 bits.
 HASH_HEX_CHARS = 15
 
+#: Decimal places at which DECIMAL/FLOAT columns are compared. A deliberate,
+#: documented limitation - see CLAUDE.md section 4.2.
+DEFAULT_FLOAT_SCALE = 6
+
 
 class Dialect(ABC):
     """One database engine's half of a comparison."""
 
     name: str
 
-    #: Decimal places at which DECIMAL/FLOAT columns are compared. Both sides
-    #: MUST use the same value or every float row reports as different.
-    float_scale: int = 6
+    def __init__(
+        self,
+        float_scale: int = DEFAULT_FLOAT_SCALE,
+        side: str = "?",
+    ) -> None:
+        if float_scale < 0:
+            raise ValueError(f"float_scale must be >= 0, got {float_scale}")
+        #: Decimal places at which DECIMAL/FLOAT columns are compared. This is
+        #: per-instance, not per-class: as a class attribute a change on one
+        #: side would leak to the other, or worse, not leak - and two sides
+        #: rounding differently reports *every* float row as different. Use
+        #: `require_matching_scales` before comparing.
+        self.float_scale = float_scale
+        #: "A" or "B". Carried only so errors can name which side failed;
+        #: "table not found" is useless when two databases are in play.
+        self.side = side
+
+    def _err(self, message: str) -> ValueError:
+        return ValueError(f"[side {self.side}: {self.name}] {message}")
 
     # ---------------------------------------------------------------- setup
 
@@ -104,13 +124,33 @@ class Dialect(ABC):
 
     # ------------------------------------------------------------- queries
 
-    def key_bounds(self, table: str, key: str) -> tuple[int | None, int | None]:
+    def key_stats(self, table: str, key: str) -> KeyStats:
+        """Key range plus row and distinct-key counts, in one scan.
+
+        ``count(distinct key)`` rides along with min/max deliberately. The
+        query already has to visit the key column, and without the distinct
+        count a non-unique key goes undetected: `fetch_range` returns a dict
+        keyed by the key column, so duplicate rows collapse and their
+        differences disappear. Paying for it here costs one aggregation, not
+        an extra round trip.
+        """
+        k = self.quote(key)
         sql = (
-            f"select min({self.quote(key)}), max({self.quote(key)}) "
+            f"select min({k}), max({k}), count(*), count(distinct {k}) "
             f"from {self.qualify(table)}"
         )
-        lo, hi = self.query(sql)[0]
-        return (None, None) if lo is None else (int(lo), int(hi))
+        lo, hi, rows, distinct = self.query(sql)[0]
+        if lo is None:
+            return KeyStats(None, None, 0, 0)
+        try:
+            return KeyStats(int(lo), int(hi), int(rows), int(distinct))
+        except (TypeError, ValueError) as exc:
+            # A varchar or uuid key lands here. The bisection arithmetic is
+            # integer-only, so say that plainly instead of leaking a cast error.
+            raise self._err(
+                f"key column {key!r} in {table} is not an integer "
+                f"(min value {lo!r}); only integer keys are supported"
+            ) from exc
 
     def segment_checksums(
         self,
@@ -160,25 +200,64 @@ class Dialect(ABC):
             f"select {k}, {exprs} from {self.qualify(table)} "
             f"where {k} >= {lo} and {k} < {hi} order by {k}"
         )
-        return {int(row[0]): tuple(row[1:]) for row in self.query(sql)}
+        out: dict[int, tuple[str, ...]] = {}
+        for row in self.query(sql):
+            rk = int(row[0])
+            if rk in out:
+                # Second line of defence behind the up-front uniqueness check
+                # in `key_stats`: a key that duplicates only inside a fetched
+                # range would otherwise overwrite the earlier row and silently
+                # drop a real difference.
+                raise self._err(
+                    f"duplicate key {rk} in {table}: key column {key!r} is not "
+                    f"unique, so rows cannot be compared one-to-one"
+                )
+            out[rk] = tuple(row[1:])
+        return out
 
 
-def get_dialect(connection_string: str) -> Dialect:
+def get_dialect(
+    connection_string: str,
+    side: str = "?",
+    float_scale: int = DEFAULT_FLOAT_SCALE,
+) -> Dialect:
+    """Open a connection and return the dialect for it.
+
+    Drivers are imported lazily so a DuckDB-only user never needs a PostgreSQL
+    driver installed, and vice versa.
+    """
     scheme = connection_string.split(":", 1)[0].lower()
     if scheme in ("duckdb",):
         from parity.dialects.duckdb_dialect import DuckDBDialect
 
-        dialect: Dialect = DuckDBDialect()
+        dialect: Dialect = DuckDBDialect(float_scale=float_scale, side=side)
     elif scheme in ("postgres", "postgresql"):
         from parity.dialects.postgres_dialect import PostgresDialect
 
-        dialect = PostgresDialect()
+        dialect = PostgresDialect(float_scale=float_scale, side=side)
     else:
         raise ValueError(
-            f"No dialect for {scheme!r}. Supported: duckdb, postgres."
+            f"[side {side}] no dialect for scheme {scheme!r}. "
+            f"Supported: duckdb, postgres."
         )
     dialect.connect(connection_string)
     return dialect
+
+
+def require_matching_scales(a: Dialect, b: Dialect) -> None:
+    """Refuse to compare two sides that round floats differently.
+
+    If the scales disagree, every DECIMAL and FLOAT row renders to different
+    canonical text and the tool reports the whole table as changed. That looks
+    like a catastrophic migration bug rather than a configuration mistake, so
+    fail before any query runs.
+    """
+    if a.float_scale != b.float_scale:
+        raise ValueError(
+            f"float_scale differs between sides: A={a.float_scale} "
+            f"B={b.float_scale}. Both sides must round identically or every "
+            f"float and decimal row reports as different."
+        )
 
 
 def map_type(raw: str) -> LogicalType:

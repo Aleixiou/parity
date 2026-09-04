@@ -15,7 +15,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Sequence
 
-from parity.dialects.base import Dialect
+from parity.dialects.base import Dialect, require_matching_scales
 from parity.types import Column, DiffResult, DiffStats, LogicalType, RowDiff
 
 EMPTY = (0, 0)
@@ -50,6 +50,7 @@ def diff(
 ) -> DiffResult:
     started = time.perf_counter()
     stats = DiffStats()
+    require_matching_scales(a, b)
 
     cols_a = {c.name: c for c in a.columns(a_table)}
     cols_b = {c.name: c for c in b.columns(b_table)}
@@ -57,6 +58,15 @@ def diff(
         raise ValueError(f"[side A] key column {key!r} not in {a_table}")
     if key not in cols_b:
         raise ValueError(f"[side B] key column {key!r} not in {b_table}")
+    for side, table, col in (("A", a_table, cols_a[key]), ("B", b_table, cols_b[key])):
+        if col.logical_type is not LogicalType.INTEGER:
+            # The bisection arithmetic divides the key range. A varchar or uuid
+            # key would produce a confusing SQL cast error deep in the walk.
+            raise ValueError(
+                f"[side {side}] key column {key!r} in {table} is "
+                f"{col.raw_type or col.logical_type.value}, not an integer. "
+                f"Only integer keys are supported."
+            )
 
     shared = sorted((set(cols_a) & set(cols_b)) - {key} - set(exclude))
     if columns:
@@ -77,23 +87,44 @@ def diff(
     b_cols = [cols_b[c] for c in shared]
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        fa = pool.submit(a.key_bounds, a_table, key)
-        fb = pool.submit(b.key_bounds, b_table, key)
-        (a_lo, a_hi), (b_lo, b_hi) = fa.result(), fb.result()
+        fa = pool.submit(a.key_stats, a_table, key)
+        fb = pool.submit(b.key_stats, b_table, key)
+        ks_a, ks_b = fa.result(), fb.result()
     stats.queries += 2
 
-    bounds = [v for v in (a_lo, a_hi, b_lo, b_hi) if v is not None]
+    # A non-unique key is fatal, not a warning: `fetch_range` maps key -> row,
+    # so duplicates collapse and their differences disappear. Reporting
+    # "identical" for a table we could not actually compare is the one outcome
+    # this tool must never produce.
+    for side, table, ks in (("A", a_table, ks_a), ("B", b_table, ks_b)):
+        if ks.has_duplicate_keys:
+            raise ValueError(
+                f"[side {side}] key column {key!r} in {table} is not unique: "
+                f"{ks.rows:,} rows but only {ks.distinct:,} distinct keys. "
+                f"Rows cannot be compared one-to-one."
+            )
+    stats.rows_compared_a, stats.rows_compared_b = ks_a.rows, ks_b.rows
+
+    bounds = [v for v in (ks_a.lo, ks_a.hi, ks_b.lo, ks_b.hi) if v is not None]
     if not bounds:
         stats.seconds = time.perf_counter() - started
-        return DiffResult([], stats, a_cols, warnings)
+        return DiffResult([], stats, a_cols, warnings, float_scale=a.float_scale)
 
     lo, hi = min(bounds), max(bounds) + 1
     diffs: list[RowDiff] = []
     queue: list[tuple[int, int]] = [(lo, hi)]
 
+    truncated = False
     while queue:
         if max_diffs is not None and len(diffs) >= max_diffs:
-            warnings.append(f"stopped after {max_diffs} differences (--max-diffs)")
+            # The remaining queue is unexplored, so this answer is partial.
+            # Flag it on the result, not only in a warning string, so no caller
+            # can mistake it for a clean comparison.
+            warnings.append(
+                f"stopped after {max_diffs} differences (--max-diffs); "
+                f"{len(queue)} key range(s) left unchecked"
+            )
+            truncated = True
             break
 
         s_lo, s_hi = queue.pop()
@@ -128,7 +159,10 @@ def diff(
 
     stats.seconds = time.perf_counter() - started
     diffs.sort(key=lambda d: d.key)
-    return DiffResult(diffs, stats, a_cols, warnings)
+    return DiffResult(
+        diffs, stats, a_cols, warnings,
+        truncated=truncated, float_scale=a.float_scale,
+    )
 
 
 def _compare_rows(

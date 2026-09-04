@@ -45,6 +45,31 @@ class TableRef:
         return self.connection.split(":", 1)[0]
 
 
+@dataclass(frozen=True)
+class KeyStats:
+    """What one side reports about its key column, from a single scan.
+
+    ``rows`` and ``distinct`` ride along with ``min``/``max`` because the
+    min/max query already has to visit the key column. Getting uniqueness for
+    free matters: a non-unique key silently collapses rows during comparison
+    and makes differences vanish, which is the most dangerous failure this
+    tool can have.
+    """
+
+    lo: int | None
+    hi: int | None
+    rows: int
+    distinct: int
+
+    @property
+    def empty(self) -> bool:
+        return self.rows == 0
+
+    @property
+    def has_duplicate_keys(self) -> bool:
+        return self.rows != self.distinct
+
+
 @dataclass
 class Segment:
     """A half-open key range ``[lo, hi)`` and the checksum each side reports."""
@@ -90,10 +115,19 @@ class DiffResult:
     stats: DiffStats
     columns: list[Column]
     warnings: list[str] = field(default_factory=list)
+    #: True when the walk stopped early (``max_diffs``), so ``diffs`` is a
+    #: partial answer. CLAUDE.md section 8: never let an approximate result
+    #: look exact. Callers must not read ``identical`` as "tables match" when
+    #: this is set.
+    truncated: bool = False
+    #: Decimal places at which DECIMAL/FLOAT columns were compared. Surfaced
+    #: in output so a reader knows the comparison was rounded, not exact.
+    float_scale: int = 6
 
     @property
     def identical(self) -> bool:
-        return not self.diffs
+        """No differences found *and* the whole key space was walked."""
+        return not self.diffs and not self.truncated
 
     def by_kind(self, kind: str) -> list[RowDiff]:
         return [d for d in self.diffs if d.kind == kind]

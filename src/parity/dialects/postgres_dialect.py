@@ -38,7 +38,9 @@ class PostgresDialect(Dialect):
             "order by ordinal_position"
         )
         if not rows:
-            raise ValueError(f"[side A/B: postgres] table not found: {table}")
+            raise self._err(
+                f"table not found: {table} (looked in schema {schema!r})"
+            )
         return [Column(r[0], map_type(r[1]), r[1]) for r in rows]
 
     # ----------------------------------------------------------- rendering
@@ -51,7 +53,12 @@ class PostgresDialect(Dialect):
         elif t in (LogicalType.DECIMAL, LogicalType.FLOAT):
             expr = f"cast(round(({c})::numeric, {self.float_scale}) as text)"
         elif t is LogicalType.BOOLEAN:
-            expr = f"case when {c} then 'true' else 'false' end"
+            # `else` must not swallow NULL. With `case when c then 'true' else
+            # 'false' end` a NULL boolean renders as 'false' - identical to a
+            # real FALSE - so the coalesce below never fires and NULL-vs-FALSE
+            # reports as a match. Both engines agreed on the wrong answer,
+            # which is exactly why the encoding tests plant differences.
+            expr = f"case when {c} then 'true' when not {c} then 'false' end"
         elif t is LogicalType.DATE:
             expr = f"to_char({c}, 'YYYY-MM-DD')"
         elif t is LogicalType.TIMESTAMP:

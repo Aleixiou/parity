@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from parity.dialects.base import HASH_HEX_CHARS, NULL_SENTINEL, Dialect, map_type
@@ -16,7 +17,19 @@ class DuckDBDialect(Dialect):
 
         # duckdb:///path/to.db  |  duckdb://:memory:  |  duckdb:///:memory:
         path = connection_string.split("://", 1)[1].lstrip("/")
-        self._conn = duckdb.connect(path if path else ":memory:", read_only=False)
+        if not path or path == ":memory:":
+            # An in-memory database holds no user data to protect, and a
+            # read-only in-memory database is empty by definition.
+            self._conn = duckdb.connect(":memory:")
+            return
+        if not os.path.exists(path):
+            # read_only=True on a missing path fails with a driver-level error
+            # that does not say which side or which file. Say it ourselves.
+            raise self._err(f"database file not found: {path}")
+        # CLAUDE.md section 6: read-only by construction. Enforcing it at the
+        # connection means no bug in query building can ever write to a user's
+        # database. It also lets several parity runs share one file.
+        self._conn = duckdb.connect(path, read_only=True)
 
     def close(self) -> None:
         self._conn.close()
@@ -36,7 +49,9 @@ class DuckDBDialect(Dialect):
             "order by ordinal_position"
         )
         if not rows:
-            raise ValueError(f"[side A/B: duckdb] table not found: {table}")
+            raise self._err(
+                f"table not found: {table} (looked in schema {schema!r})"
+            )
         return [Column(r[0], map_type(r[1]), r[1]) for r in rows]
 
     # ----------------------------------------------------------- rendering
@@ -49,7 +64,12 @@ class DuckDBDialect(Dialect):
         elif t in (LogicalType.DECIMAL, LogicalType.FLOAT):
             expr = f"cast(cast({c} as decimal(38,{self.float_scale})) as varchar)"
         elif t is LogicalType.BOOLEAN:
-            expr = f"case when {c} then 'true' else 'false' end"
+            # `else` must not swallow NULL. With `case when c then 'true' else
+            # 'false' end` a NULL boolean renders as 'false' - identical to a
+            # real FALSE - so the coalesce below never fires and NULL-vs-FALSE
+            # reports as a match. Both engines agreed on the wrong answer,
+            # which is exactly why the encoding tests plant differences.
+            expr = f"case when {c} then 'true' when not {c} then 'false' end"
         elif t is LogicalType.DATE:
             expr = f"strftime({c}, '%Y-%m-%d')"
         elif t is LogicalType.TIMESTAMP:
