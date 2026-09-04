@@ -1,0 +1,29 @@
+[project]
+name = "parity"
+version = "0.1.0"
+description = "Prove two tables in two different databases hold the same data - without moving the data."
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+duckdb = ["duckdb>=1.0"]
+postgres = ["psycopg[binary]>=3.1"]
+all = ["duckdb>=1.0", "psycopg[binary]>=3.1"]
+
+[project.scripts]
+parity = "parity.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "postgres: requires a reachable PostgreSQL server",
+    "duckdb: requires the duckdb driver",
+]

@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.duckdb
+*.egg-info/
+dist/
+build/
+demo/data/
+e2e.duckdb
+.pytest_cache/
+.idea/
