@@ -1125,7 +1125,9 @@ def test_a_table_wider_than_the_postgres_argument_limit_compares(pg, duck, pg_ur
 
     from parity.engine import diff
 
-    n = 150
+    # 500, not 150: the README claims "tested to 500 columns", and a claim a
+    # skeptical reader will try to reproduce should be the one CI actually runs.
+    n = 500
     cols_ddl = ", ".join(f"c{i} varchar" for i in range(n))
     same = ", ".join(f"'v{i}'" for i in range(n))
     changed = ", ".join(("'CHANGED'" if i == 99 else f"'v{i}'") for i in range(n))
