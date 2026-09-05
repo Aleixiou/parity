@@ -321,26 +321,34 @@ class Dialect(ABC):
     ) -> str:
         """The checksum query. Split out so its shape can be tested directly."""
         k = self.quote(key)
-        # Widen the key offset before multiplying. `(key - lo) * n_segments`
-        # overflows a signed 64-bit integer once the span passes ~2.9e17, which
-        # is ordinary for sparse bigint keys and guaranteed for hashed ones.
+        # Every part of the bucket expression has to survive a key range as wide
+        # as bigint itself, which is what a hashed key produces.
         #
-        # This is done unconditionally rather than only for wide ranges. The
+        # 1. Widen the key *before* subtracting, not after. `wide_int(k - lo)`
+        #    still computes `k - lo` in the column's own type first, and that
+        #    overflows outright when lo is near the bottom of the range and the
+        #    key is near the top.
+        # 2. Emit the span as one precomputed literal. Letting SQL evaluate
+        #    `hi - lo` puts the same overflow back.
+        # 3. Bound the range inclusively. `hi` is `max_key + 1`, so for a table
+        #    holding the largest bigint it is one past what the type can hold;
+        #    `<= hi - 1` keeps every literal inside the column's own range.
+        #
+        # Widening is unconditional rather than only for wide ranges. The
         # conditional version was measured at 10M rows and saved nothing - 39.3s
         # against 38.4s, inside run-to-run noise, because the cost here is
         # dominated by MD5 over every row, not by integer arithmetic. Paying a
         # couple of percent to delete a second code path is the right trade in
         # the one function whose off-by-one would make the walker skip rows.
-        offset = self.wide_int(f"({k} - {lo})")
-        bucket = self.int_div(f"{offset} * {n_segments}", f"({hi} - {lo})")
-        sql = (
+        offset = f"({self.wide_int(k)} - ({lo}))"
+        bucket = self.int_div(f"{offset} * {n_segments}", f"({hi - lo})")
+        return (
             f"select {bucket} as seg, count(*), "
             f"{self.sum_wide(self.row_hash(columns))} "
             f"from {self.qualify(table)} "
-            f"where {k} >= {lo} and {k} < {hi} "
+            f"where {k} >= {lo} and {k} <= {hi - 1} "
             f"group by 1"
         )
-        return sql
 
     def fetch_range(
         self,
@@ -359,9 +367,12 @@ class Dialect(ABC):
         # With no comparable columns the row tuple is empty and only key
         # presence distinguishes the sides - see `row_text`.
         exprs = "".join(", " + self.normalize(c) for c in columns)
+        # Inclusive upper bound, for the same reason as the checksum query:
+        # `hi` is `max_key + 1`, which for a table holding the largest bigint is
+        # one past what the column type can represent.
         sql = (
             f"select {k}{exprs} from {self.qualify(table)} "
-            f"where {k} >= {lo} and {k} < {hi} order by {k}"
+            f"where {k} >= {lo} and {k} <= {hi - 1} order by {k}"
         )
         out: dict[int, tuple[str, ...]] = {}
         for row in self.query(sql):

@@ -192,6 +192,19 @@ case-insensitive follow-up query and names the near miss.
   it surfaces as a crash and not a wrong answer, but the walk still dies on a
   legitimate key space. The key offset is therefore widened before the multiply
   via a dialect method (`wide_int`): PostgreSQL `::numeric`, DuckDB `hugeint`.
+  Widening the *result* is not enough, and the first attempt at this fix got it
+  wrong. Three separate overflows lurk in the bucket expression, and a key range
+  as wide as bigint itself trips all three:
+
+  1. `key - lo` is evaluated in the column's own type **before** any widening
+     cast applies, so widen the key first: `wide_int(k) - lo`, never
+     `wide_int(k - lo)`.
+  2. `hi - lo` overflows if SQL is left to evaluate it. Compute the span in
+     Python and emit it as one literal.
+  3. `hi` is `max_key + 1`, which for a table holding the largest bigint is one
+     past what the type can represent. Bound the range inclusively
+     (`k <= hi - 1`) so every literal stays inside the column's own range.
+
   This is done **unconditionally**. A version that widened only when the span
   required it was measured at 10M rows and saved nothing — 39.3s against
   38.4s, inside run-to-run noise — because the cost is dominated by MD5 over

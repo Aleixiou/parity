@@ -1186,3 +1186,67 @@ def test_unicode_table_and_column_names_round_trip(tmp_path):
     finally:
         a.close()
         b.close()
+
+
+@pytest.mark.duckdb
+def test_keys_spanning_the_entire_bigint_range(tmp_path):
+    """The widest key range a bigint column can hold.
+
+    Three separate overflows lurk here, and the first fix only caught one:
+    `key - lo` overflows in the column's own type before any widening cast
+    applies; `hi - lo` overflows if SQL is left to evaluate it; and `hi` is
+    `max_key + 1`, which for the largest bigint is one past what the type can
+    represent at all. A hashed key - the planned route to non-integer keys -
+    produces exactly this distribution.
+    """
+    from parity.engine import diff
+
+    lo, hi = -(2**63) + 1, 2**63 - 1
+
+    def make(path: str, middle: str) -> str:
+        con = duckdb_write(path)
+        con.execute("create table t (id bigint, v varchar)")
+        con.execute(
+            f"insert into t values ({lo}, 'low'), (0, '{middle}'), ({hi}, 'high')"
+        )
+        con.close()
+        return path
+
+    a = open_duckdb(make(str(tmp_path / "span_a.duckdb"), "middle"), side="A")
+    b = open_duckdb(make(str(tmp_path / "span_b.duckdb"), "CHANGED"), side="B")
+    try:
+        result = diff(a, b, "main.t", "main.t", "id")
+        assert [(d.key, d.kind) for d in result.diffs] == [(0, "different")]
+        # The extremes must be compared, not skipped for being at the edges.
+        assert result.stats.rows_compared_a == 3
+    finally:
+        a.close()
+        b.close()
+
+
+@pytest.mark.duckdb
+def test_the_largest_and_smallest_keys_are_not_skipped(tmp_path):
+    """Negative control for the test above: a difference *at* each extreme must
+    be found, so an inclusive bound cannot quietly drop the endpoints."""
+    from parity.engine import diff
+
+    lo, hi = -(2**63) + 1, 2**63 - 1
+
+    def make(path: str, low_v: str, high_v: str) -> str:
+        con = duckdb_write(path)
+        con.execute("create table t (id bigint, v varchar)")
+        con.execute(f"insert into t values ({lo}, '{low_v}'), ({hi}, '{high_v}')")
+        con.close()
+        return path
+
+    a = open_duckdb(make(str(tmp_path / "ext_a.duckdb"), "a", "b"), side="A")
+    b = open_duckdb(make(str(tmp_path / "ext_b.duckdb"), "CHANGED", "ALSO"), side="B")
+    try:
+        result = diff(a, b, "main.t", "main.t", "id")
+        assert [(d.key, d.kind) for d in result.diffs] == [
+            (lo, "different"),
+            (hi, "different"),
+        ]
+    finally:
+        a.close()
+        b.close()
