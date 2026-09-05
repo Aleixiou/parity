@@ -1,0 +1,110 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  # Called by release.yml so nothing publishes without a green suite.
+  workflow_call:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The full suite, both engines. PostgreSQL comes from a service container.
+  cross-engine:
+    name: python ${{ matrix.python }} + postgres ${{ matrix.postgres }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+        postgres: ["16"]
+        include:
+          # One run against a newer major, to catch the engines drifting apart.
+          - python: "3.13"
+            postgres: "18"
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}-alpine
+        env:
+          POSTGRES_USER: parity
+          POSTGRES_PASSWORD: parity
+          POSTGRES_DB: parity
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U parity"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PARITY_TEST_PG: postgres://parity:parity@127.0.0.1:5432/parity
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - run: pip install -e ".[all]" pytest
+
+      - name: run tests
+        run: pytest -v
+
+      - name: the cross-engine tests must not have silently skipped
+        # A green run that skipped every PostgreSQL test would prove nothing,
+        # and that is exactly how a broken service container looks.
+        run: pytest tests/test_integration.py -q --no-header -p no:cacheprovider
+          | tee /tmp/out.txt
+          && ! grep -qi "skipped" /tmp/out.txt
+
+      - name: end-to-end proof at 200k rows
+        run: |
+          python demo/generate.py --rows 200000
+          python demo/benchmark.py --expect-clean
+          python demo/generate.py --rows 200000 --plant
+          python demo/benchmark.py --expect-planted
+
+  # A user who installs only the DuckDB extra must still get a working tool -
+  # and must never be forced to have a PostgreSQL driver on the machine.
+  duckdb-only:
+    name: duckdb extra alone
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - run: pip install -e ".[duckdb]" pytest
+
+      - name: psycopg must not be installed
+        run: |
+          if pip show psycopg > /dev/null 2>&1; then
+            echo "the duckdb extra pulled in a PostgreSQL driver"; exit 1
+          fi
+
+      - name: --help works with no postgres driver
+        run: parity --help && parity --version
+
+      - run: pytest -v
+
+  windows:
+    name: windows + duckdb
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[all]" pytest
+      - run: pytest -v
