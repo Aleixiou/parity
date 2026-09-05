@@ -339,9 +339,18 @@ and no packaging yet; that is what `BUILD_SPEC.md` picks up.
 
 ```
 postgres://user:password@host:port/database     (also postgresql://)
-duckdb:///relative/path.duckdb
+duckdb:///relative/path.duckdb                  (three slashes = relative)
+duckdb:////var/lib/warehouse.duckdb             (four slashes = absolute, POSIX)
+duckdb:///C:/data/warehouse.duckdb              (absolute, Windows)
 duckdb:///:memory:
 ```
+
+The slash count carries meaning, as in sqlite and SQLAlchemy: exactly **one**
+leading slash is removed, the one separating the empty authority from the path.
+Stripping them all quietly turns every absolute POSIX path into a relative one
+and the tool then reports "database file not found" for a file that is plainly
+there. Windows hides this completely, because its paths begin with a drive
+letter and carry only one leading slash to start with.
 
 The scheme before `://` selects the dialect in `get_dialect()`. Table names may
 be schema-qualified (`public.orders`, `main.orders`); unqualified names default

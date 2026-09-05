@@ -111,7 +111,9 @@ Connection strings:
 
 ```
 postgres://user:password@host:port/database     (also postgresql://)
-duckdb:///relative/path.duckdb
+duckdb:///relative/path.duckdb                  (three slashes = relative)
+duckdb:////var/lib/warehouse.duckdb             (four slashes = absolute)
+duckdb:///C:/data/warehouse.duckdb              (absolute, Windows)
 duckdb:///:memory:
 ```
 

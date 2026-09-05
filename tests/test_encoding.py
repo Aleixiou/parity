@@ -919,3 +919,47 @@ def test_a_column_whose_name_needs_quoting_round_trips(tmp_path):
     finally:
         a.close()
         b.close()
+
+
+@pytest.mark.parametrize(
+    "connection_string,expected",
+    [
+        # The slashes carry meaning, following the sqlite/SQLAlchemy convention.
+        ("duckdb:///relative/path.duckdb", "relative/path.duckdb"),
+        ("duckdb:///./demo/data/new.duckdb", "./demo/data/new.duckdb"),
+        # Absolute POSIX: four slashes. Stripping them all made this relative,
+        # so the tool reported "database file not found" for a file plainly
+        # there - on every Linux and macOS machine, invisibly to Windows.
+        ("duckdb:////tmp/abs.duckdb", "/tmp/abs.duckdb"),
+        ("duckdb:////var/lib/warehouse.duckdb", "/var/lib/warehouse.duckdb"),
+        # Absolute Windows: the drive letter supplies its own root.
+        ("duckdb:///C:/data/warehouse.duckdb", "C:/data/warehouse.duckdb"),
+        ("duckdb:///:memory:", ":memory:"),
+        ("duckdb://:memory:", ":memory:"),
+    ],
+)
+def test_duckdb_connection_string_paths(connection_string: str, expected: str):
+    from parity.dialects.duckdb_dialect import duckdb_path
+
+    assert duckdb_path(connection_string) == expected
+
+
+@pytest.mark.duckdb
+def test_an_absolute_path_opens(tmp_path):
+    """End to end on whatever this platform calls an absolute path."""
+    from parity.dialects.duckdb_dialect import duckdb_path
+
+    target = tmp_path / "absolute.duckdb"
+    con = duckdb_write(str(target))
+    con.execute("create table t (id bigint)")
+    con.close()
+
+    # Exactly what conftest.open_duckdb builds, from an absolute path.
+    connection_string = f"duckdb:///{target}"
+    assert duckdb_path(connection_string) == str(target)
+
+    d = get_dialect(connection_string, side="B")
+    try:
+        assert d.query("select count(*) from t")[0][0] == 0
+    finally:
+        d.close()

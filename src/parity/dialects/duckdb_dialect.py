@@ -9,6 +9,27 @@ from parity.dialects.base import HASH_HEX_CHARS, NULL_SENTINEL, Dialect
 from parity.types import Column, LogicalType
 
 
+def duckdb_path(connection_string: str) -> str:
+    """Extract the database path from a ``duckdb://`` connection string.
+
+    Following the sqlite/SQLAlchemy convention, the slashes carry meaning:
+
+        duckdb:///relative/path.db   ->  relative/path.db
+        duckdb:////var/lib/w.db      ->  /var/lib/w.db     (absolute, POSIX)
+        duckdb:///C:/data/w.db       ->  C:/data/w.db      (absolute, Windows)
+        duckdb:///:memory:           ->  :memory:
+
+    So exactly *one* leading slash comes off - the one separating the empty
+    authority from the path. Stripping them all (``lstrip("/")``) quietly turned
+    every absolute POSIX path into a relative one, and the tool then reported
+    "database file not found" for a file that was plainly there. Windows hid it
+    completely, because its paths start with a drive letter and so carry only
+    one leading slash to begin with; it took a Linux CI run to surface.
+    """
+    rest = connection_string.split("://", 1)[1]
+    return rest[1:] if rest.startswith("/") else rest
+
+
 class DuckDBDialect(Dialect):
     name = "duckdb"
     default_schema = "main"
@@ -16,8 +37,7 @@ class DuckDBDialect(Dialect):
     def connect(self, connection_string: str) -> None:
         import duckdb
 
-        # duckdb:///path/to.db  |  duckdb://:memory:  |  duckdb:///:memory:
-        path = connection_string.split("://", 1)[1].lstrip("/")
+        path = duckdb_path(connection_string)
         if not path or path == ":memory:":
             # An in-memory database holds no user data to protect, and a
             # read-only in-memory database is empty by definition.
