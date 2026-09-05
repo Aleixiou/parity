@@ -17,8 +17,8 @@ this file:
 from __future__ import annotations
 
 import pytest
-
 from conftest import PG_SCHEMA, duckdb_write, open_duckdb, open_pg
+
 from parity.dialects.base import (
     DEFAULT_FLOAT_SCALE,
     Dialect,

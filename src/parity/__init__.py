@@ -11,12 +11,14 @@ DuckDB-only user is never forced to install a PostgreSQL driver.
 
 from __future__ import annotations
 
+from typing import Any
+
 __version__ = "0.1.0"
 
-__all__ = ["__version__", "get_dialect", "diff"]
+__all__ = ["__version__", "diff", "get_dialect"]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     # Lazy re-export: keeps `import parity` free of driver imports.
     if name == "get_dialect":
         from parity.dialects.base import get_dialect

@@ -57,8 +57,10 @@ PLANTS = [
     # outside the range so it also exercises a sparse key space.
     (
         "extra row",
-        "insert into {t} values ({extra}, 1, 1.00, 'paid', false, "
-        "timestamp '2024-01-01 00:00:00', 'extra')",
+        (
+            "insert into {t} values ({extra}, 1, 1.00, 'paid', false, "
+            "timestamp '2024-01-01 00:00:00', 'extra')"
+        ),
     ),
     # NULL became an empty string. The trap naive implementations pass over,
     # and a real migration bug class.
@@ -154,7 +156,10 @@ def main(argv: list[str] | None = None) -> int:
         applied = plant(args.pg, args.rows)
         keys = plant_keys(args.rows)
         print(f"planted {len(applied)} differences on side A (postgres):")
-        for label, key in zip(applied, ["changed", "deleted", "extra", "null_trap", "bool_trap"]):
+        names = ["changed", "deleted", "extra", "null_trap", "bool_trap"]
+        # strict: if PLANTS and these key names ever drift apart, say so
+        # rather than silently printing a short list.
+        for label, key in zip(applied, names, strict=True):
             print(f"  {label:<22} id {keys[key]:,}")
         return 0
 

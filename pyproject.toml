@@ -60,3 +60,44 @@ markers = [
     "postgres: requires a reachable PostgreSQL server",
     "duckdb: requires the duckdb driver",
 ]
+
+[tool.ruff]
+line-length = 90
+target-version = "py310"
+
+[tool.ruff.lint]
+# A curated set, not everything. Correctness and portability rules earn their
+# keep here; stylistic ones that would churn the diff without making the tool
+# more trustworthy are left off.
+select = [
+    "E", "W",      # pycodestyle
+    "F",           # pyflakes
+    "I",           # import sorting
+    "UP",          # pyupgrade - keeps us on modern typing
+    "B",           # bugbear
+    "C4",          # comprehensions
+    "PIE",
+    "RUF",
+    "ISC",         # implicit string concatenation: the missing-comma bug class
+    "BLE",         # blind excepts must be justified in place
+    "S",           # bandit - this tool builds SQL, so injection rules matter
+]
+ignore = [
+    "E501",        # line length is handled by the formatter, not enforced here
+    "S101",        # asserts are how the demo scripts state their proofs
+    "RUF059",      # unused unpacked values read better than `_` in these tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests and demos deliberately build SQL from literals and use asserts.
+# S311/S324: test data uses `random` and MD5 as tools, not as security
+# primitives. S108: a /tmp path inside a parametrised string, not a real file.
+"tests/*" = ["S105", "S106", "S108", "S311", "S324", "S608", "BLE001"]
+"demo/*"  = ["S608", "S311"]
+# Emitting dialect SQL by hand *is* the product (CLAUDE.md section 6) - there is
+# no ORM to hide behind. Safety comes from `quote()` and `sql_literal()`, which
+# have their own injection tests in tests/test_encoding.py.
+"src/parity/dialects/base.py" = ["S608"]
+# proof.py is kept close to the original author's script so it stays readable
+# next to the findings it produced; its terse one-line style is deliberate.
+"demo/proof.py" = ["E401", "E402", "E701", "E702", "B007", "S311", "S608"]

@@ -1,12 +1,16 @@
 """End-to-end proof: identical 200k-row tables in DuckDB and Postgres,
 then the same with planted differences."""
-import sys, time
-sys.path.insert(0, "src")
-import duckdb, psycopg
-from parity.dialects.base import get_dialect
-from parity.engine import diff, bucket_bounds
+import sys
+import time
 
+sys.path.insert(0, "src")
 import os
+
+import duckdb
+import psycopg
+
+from parity.dialects.base import get_dialect
+from parity.engine import bucket_bounds, diff
 
 N = 200_000
 # CLAUDE.md section 7 documents the Docker container on port 55432. This machine
@@ -81,6 +85,7 @@ print("\n*** exact match on all planted differences ***")
 # bucket_bounds must invert the SQL bucket expression for every key
 print("\n--- bucket_bounds vs SQL bucket assignment ---")
 import random
+
 a = get_dialect(PG)
 for trial in range(5):
     lo = random.randint(1, 1000); hi = lo + random.randint(50, 5000); n = random.choice([2,7,32,100])

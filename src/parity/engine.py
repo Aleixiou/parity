@@ -13,10 +13,11 @@ differ, and only once those ranges are small.
 from __future__ import annotations
 
 import time
+from collections.abc import Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeout
 from contextlib import contextmanager
-from typing import Sequence
+from typing import Any, TypeVar
 
 from parity.dialects.base import Dialect, require_matching_scales
 from parity.types import Column, DiffResult, DiffStats, LogicalType, RowDiff
@@ -30,6 +31,9 @@ EMPTY = (0, 0)
 #: that is decimal on one side and double on the other still compares correctly.
 #: This is the common migration case and must not raise a warning.
 _NUMERIC_EQUIVALENT = frozenset({LogicalType.DECIMAL, LogicalType.FLOAT})
+
+_A = TypeVar("_A")
+_B = TypeVar("_B")
 
 
 def bucket_bounds(i: int, lo: int, hi: int, n: int) -> tuple[int, int]:
@@ -51,7 +55,7 @@ def bucket_bounds(i: int, lo: int, hi: int, n: int) -> tuple[int, int]:
 _POLL_SECONDS = 0.2
 
 
-def _gather(fa: Future, fb: Future):
+def _gather(fa: Future[_A], fb: Future[_B]) -> tuple[_A, _B]:
     """Wait for both sides, staying interruptible while doing so.
 
     ``Future.result()`` with no timeout blocks in a lock acquire that Windows
@@ -69,7 +73,7 @@ def _gather(fa: Future, fb: Future):
 
 
 @contextmanager
-def _cancel_on_interrupt(a: Dialect, b: Dialect):
+def _cancel_on_interrupt(a: Dialect, b: Dialect) -> Iterator[None]:
     """Turn a Ctrl-C into an actual abort of both in-flight queries.
 
     Both sides are queried on worker threads, so the interrupt lands on the
@@ -87,8 +91,9 @@ def _cancel_on_interrupt(a: Dialect, b: Dialect):
         for side in (a, b):
             try:
                 side.cancel()
-            except Exception:
-                # A failed cancel must never replace the real exception.
+            except Exception:  # noqa: BLE001, S110
+                # A failed cancel must never replace the real exception -
+                # the KeyboardInterrupt below is what the caller needs.
                 pass
         raise
 
@@ -210,7 +215,11 @@ def diff(
         max_workers=2, thread_name_prefix="parity"
     ) as pool, _cancel_on_interrupt(a, b):
 
-        def both(fn_name: str, *args_a, _args_b=None):
+        def both(
+            fn_name: str,
+            *args_a: Any,
+            _args_b: tuple[Any, ...] | None = None,
+        ) -> tuple[Any, Any]:
             fa = pool.submit(getattr(a, fn_name), a_table, *args_a)
             fb = pool.submit(getattr(b, fn_name), b_table, *(_args_b or args_a))
             stats.queries += 2
@@ -377,18 +386,28 @@ def _compare_rows(
     stats.rows_downloaded += len(rows_a) + len(rows_b)
 
     names = [c.name for c in a_cols]
+    # `strict=True` on every zip below is load-bearing, not tidiness. Both sides
+    # render the same column list in the same order, so the tuples must be the
+    # same length as `names`. If that invariant ever broke, a plain zip would
+    # silently truncate and simply not report the trailing columns - a
+    # difference the tool found and then dropped, which is the one outcome it
+    # must never produce. Better to raise.
     for k in sorted(set(rows_a) | set(rows_b)):
         ra, rb = rows_a.get(k), rows_b.get(k)
         if ra is None:
-            diffs.append(RowDiff(k, "only_in_b", names, {}, dict(zip(names, rb or ()))))
+            diffs.append(
+                RowDiff(k, "only_in_b", names, {}, dict(zip(names, rb or (), strict=True)))
+            )
         elif rb is None:
-            diffs.append(RowDiff(k, "only_in_a", names, dict(zip(names, ra)), {}))
+            diffs.append(
+                RowDiff(k, "only_in_a", names, dict(zip(names, ra, strict=True)), {})
+            )
         elif ra != rb:
-            changed = [n for n, x, y in zip(names, ra, rb) if x != y]
+            changed = [n for n, x, y in zip(names, ra, rb, strict=True) if x != y]
             diffs.append(
                 RowDiff(
                     k, "different", changed,
-                    {n: v for n, v in zip(names, ra) if n in changed},
-                    {n: v for n, v in zip(names, rb) if n in changed},
+                    {n: v for n, v in zip(names, ra, strict=True) if n in changed},
+                    {n: v for n, v in zip(names, rb, strict=True) if n in changed},
                 )
             )

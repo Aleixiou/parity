@@ -82,12 +82,23 @@ rule the project cares most about. For each positive assertion ("these agree"),
 add the negative control ("and the harness notices when they genuinely don't").
 That discipline is what caught the boolean NULL bug in point 3 above.
 
-## Running the tests
+## Running the checks
 
 ```bash
-pip install -e ".[all]" pytest
+pip install -e ".[all]" pytest mypy ruff
 pytest
+ruff check src tests demo
+mypy src/parity --strict --ignore-missing-imports
 ```
+
+CI runs the static checks first, because they take seconds where the test
+matrix takes minutes. `mypy --strict` is what turns "type hints everywhere"
+from an aspiration into a fact, and ruff's `ISC`, `BLE` and `S` rules are on
+deliberately: implicit string concatenation inside a collection is the
+missing-comma bug class, a blind `except` has to be justified where it sits,
+and this tool builds SQL by hand so injection rules earn their place. Where a
+rule is knowingly not applicable, the ignore lives in `pyproject.toml` with the
+reason next to it rather than being switched off globally.
 
 PostgreSQL-backed tests read `PARITY_TEST_PG` and skip cleanly when nothing is
 listening, so the suite is useful with only DuckDB installed.

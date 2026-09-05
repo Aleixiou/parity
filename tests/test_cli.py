@@ -16,8 +16,8 @@ import io
 import json
 
 import pytest
-
 from conftest import duckdb_write
+
 from parity.cli import EXIT_DIFFERENCES, EXIT_ERROR, EXIT_IDENTICAL, main
 
 SCHEMA = """

@@ -22,10 +22,10 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from generate import DATA_DIR, DEFAULT_PG, TABLE, plant_keys  # noqa: E402
+from generate import DATA_DIR, DEFAULT_PG, TABLE, plant_keys
 
-from parity.dialects.base import get_dialect  # noqa: E402
-from parity.engine import diff  # noqa: E402
+from parity.dialects.base import get_dialect
+from parity.engine import diff
 
 
 def expected_planted(n: int) -> list[tuple[int, str]]:

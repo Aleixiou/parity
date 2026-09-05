@@ -18,8 +18,8 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from conftest import PG_SCHEMA, duckdb_write, open_duckdb, open_pg
+
 from parity.cli import EXIT_DIFFERENCES, EXIT_ERROR, EXIT_IDENTICAL, main
 from parity.engine import diff
 
@@ -54,8 +54,10 @@ PLANTS: dict[str, tuple[str, tuple[int, str, list[str]] | None]] = {
         (777, "only_in_b", []),
     ),
     "extra": (
-        "insert into {t} values (999999999, 1, 1.00, 'paid', false, "
-        "timestamp '2024-01-01 00:00:00', 'extra')",
+        (
+            "insert into {t} values (999999999, 1, 1.00, 'paid', false, "
+            "timestamp '2024-01-01 00:00:00', 'extra')"
+        ),
         (999999999, "only_in_a", []),
     ),
     "null_trap": (
@@ -70,15 +72,19 @@ PLANTS: dict[str, tuple[str, tuple[int, str, list[str]] | None]] = {
         (110, "different", ["is_refunded"]),
     ),
     "timestamp_shift": (
-        "update {t} set created_at = created_at + interval '1 microsecond' "
-        "where id = 4096",
+        (
+            "update {t} set created_at = created_at + interval '1 microsecond' "
+            "where id = 4096"
+        ),
         (4096, "different", ["created_at"]),
     ),
     "sub_scale": (
         # Below the 6-decimal comparison scale, so it must NOT be reported.
         # decimal(12,2) cannot hold it, so widen the column first.
-        "alter table {t} alter column amount type decimal(20,10); "
-        "update {t} set amount = amount + 0.0000000001 where id = 500",
+        (
+            "alter table {t} alter column amount type decimal(20,10); "
+            "update {t} set amount = amount + 0.0000000001 where id = 500"
+        ),
         None,
     ),
 }

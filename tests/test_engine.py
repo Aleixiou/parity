@@ -16,8 +16,8 @@ from __future__ import annotations
 import random
 
 import pytest
-
 from fakes import DictTable, FakeDialect, SyntheticTable, row_hash
+
 from parity.engine import bucket_bounds, diff
 from parity.types import Column, LogicalType
 
@@ -186,7 +186,7 @@ def test_differences_are_returned_in_key_order():
 
 def test_no_false_positives_on_a_dense_run_of_differences():
     """Every row in a contiguous block differs; none outside it may be flagged."""
-    changed = {k: ("0.00", "wrong") for k in range(5_000, 5_100)}
+    changed = dict.fromkeys(range(5000, 5100), ("0.00", "wrong"))
     result, _, _ = run(SyntheticTable(100_000), SyntheticTable(100_000, changed=changed))
 
     assert len(result.diffs) == 100
@@ -349,7 +349,7 @@ def test_a_useless_bisection_factor_is_refused(factor: int):
 
 
 def test_max_diffs_marks_the_result_truncated():
-    changed = {k: ("0.00", "wrong") for k in range(1, 5_000, 7)}
+    changed = dict.fromkeys(range(1, 5000, 7), ("0.00", "wrong"))
     result, _, _ = run(
         SyntheticTable(100_000), SyntheticTable(100_000, changed=changed), max_diffs=10
     )

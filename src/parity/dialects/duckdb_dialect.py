@@ -27,7 +27,7 @@ def duckdb_path(connection_string: str) -> str:
     one leading slash to begin with; it took a Linux CI run to surface.
     """
     rest = connection_string.split("://", 1)[1]
-    return rest[1:] if rest.startswith("/") else rest
+    return rest.removeprefix("/")
 
 
 class DuckDBDialect(Dialect):

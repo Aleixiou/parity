@@ -19,7 +19,8 @@ wraps to negative and the two engines disagree.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from parity.types import Column, KeyStats, LogicalType
 
@@ -79,7 +80,7 @@ class Dialect(ABC):
     @abstractmethod
     def query(self, sql: str) -> list[tuple[Any, ...]]: ...
 
-    def cancel(self) -> None:
+    def cancel(self) -> None:  # noqa: B027 - optional by design, see below
         """Abort whatever query is in flight, from another thread.
 
         Both sides are queried on worker threads, so a Ctrl-C reaches the main
@@ -128,7 +129,7 @@ class Dialect(ABC):
                 "from information_schema.columns "
                 f"where lower(table_name) = lower({sql_literal(name)})"
             )
-        except Exception:  # pragma: no cover - diagnosis must never mask the error
+        except Exception:  # noqa: BLE001 - diagnosing an error must never replace it
             return message
         others = [f"{s}.{t}" for s, t in near if (s, t) != (schema, name)]
         if others:
@@ -409,7 +410,7 @@ def map_type(raw: str) -> LogicalType:
         return LogicalType.BOOLEAN
     if t in {"date"}:
         return LogicalType.DATE
-    if t.startswith("timestamp") or t.startswith("datetime"):
+    if t.startswith(("timestamp", "datetime")):
         return LogicalType.TIMESTAMP
     if t in {
         "text", "varchar", "char", "bpchar", "character varying",

@@ -18,7 +18,8 @@ The bucket arithmetic below deliberately mirrors the SQL expression in
 from __future__ import annotations
 
 import hashlib
-from typing import Any, Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
+from typing import Any
 
 from parity.dialects.base import HASH_HEX_CHARS, NULL_SENTINEL, Dialect
 from parity.types import Column, KeyStats, LogicalType
@@ -29,7 +30,10 @@ def row_hash(text: str) -> int:
 
     15 hex characters = 60 bits, matching CLAUDE.md section 4.1.
     """
-    return int(hashlib.md5(text.encode("utf-8")).hexdigest()[:HASH_HEX_CHARS], 16)
+    # MD5 here is the checksum both engines compute, chosen for
+    # cross-engine agreement, not for any security property.
+    digest = hashlib.md5(text.encode("utf-8"), usedforsecurity=False).hexdigest()
+    return int(digest[:HASH_HEX_CHARS], 16)
 
 
 class Table:
@@ -238,9 +242,9 @@ class FakeDialect(Dialect):
 
 
 __all__ = [
+    "NULL_SENTINEL",
     "DictTable",
     "FakeDialect",
-    "NULL_SENTINEL",
     "SyntheticTable",
     "Table",
     "row_hash",

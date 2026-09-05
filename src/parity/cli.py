@@ -15,7 +15,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from typing import Any, Sequence, TextIO
+from collections.abc import Sequence
+from typing import Any, TextIO
 
 from parity import __version__
 from parity.dialects.base import NULL_SENTINEL
@@ -310,7 +311,9 @@ def _run_diff(args: argparse.Namespace, out: TextIO) -> int:
             if side is not None:
                 try:
                     side.close()
-                except Exception:  # pragma: no cover - best effort cleanup
+                except Exception:  # noqa: BLE001, S110
+                    # Closing is best effort: a failure here must not mask
+                    # whatever the diff itself raised.
                     pass
 
     if not args.quiet:
@@ -342,7 +345,7 @@ def main(
     except KeyboardInterrupt:  # pragma: no cover
         print("parity: interrupted", file=err)
         return EXIT_ERROR
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - the exit-2 contract, see below
         # Anything that is not a clean verdict is exit 2, never exit 1: a CI
         # job must be able to tell "the tables differ" from "the tool broke".
         print(f"parity: {exc}", file=err)

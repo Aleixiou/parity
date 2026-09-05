@@ -37,7 +37,7 @@ def _pg_available() -> tuple[bool, str]:
 
 def _duckdb_available() -> tuple[bool, str]:
     try:
-        import duckdb  # noqa: F401
+        import duckdb  # noqa: F401  - importing it *is* the probe
     except ImportError:  # pragma: no cover - depends on install extras
         return False, "duckdb is not installed"
     return True, ""

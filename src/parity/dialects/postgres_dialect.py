@@ -56,7 +56,7 @@ class PostgresDialect(Dialect):
 
     def query(self, sql: str) -> list[tuple[Any, ...]]:
         with self._conn.cursor() as cur:
-            cur.execute(sql)  # type: ignore[arg-type]
+            cur.execute(sql)
             return cur.fetchall()
 
     def quote(self, identifier: str) -> str:

@@ -13,6 +13,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Static checks first: they are seconds against minutes, so a type error or a
+  # lint regression fails before five test matrices spin up databases.
+  static:
+    name: types and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[all]" mypy ruff
+
+      - name: ruff
+        run: ruff check src tests demo
+
+      - name: mypy --strict
+        # CLAUDE.md section 6 promises type hints everywhere. Strict is what
+        # makes that a fact rather than an aspiration.
+        run: mypy src/parity --strict --ignore-missing-imports
+
   # The full suite, both engines. PostgreSQL comes from a service container.
   cross-engine:
     name: python ${{ matrix.python }} + postgres ${{ matrix.postgres }}
