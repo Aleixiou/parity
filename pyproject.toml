@@ -1,8 +1,36 @@
 [project]
-name = "parity"
+# The distribution name is `parity-diff` because `parity` is squatted on
+# PyPI by an empty project. The import name, the CLI command and the repo are
+# all still `parity`: `pip install parity-diff` gives you `parity ...`.
+name = "parity-diff"
 version = "0.1.0"
-description = "Prove two tables in two different databases hold the same data - without moving the data."
+description = "Prove two tables in two different database engines hold the same data - without moving the data out of either engine."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
+authors = [{ name = "Alessio Sorio" }]
+keywords = [
+    "data-diff", "migration", "postgres", "duckdb", "data-quality",
+    "cutover", "warehouse", "parity",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Utilities",
+]
+# The core is standard library only. Drivers are extras and are imported
+# lazily, so a DuckDB-only user is never made to install a PostgreSQL driver.
 dependencies = []
 
 [project.optional-dependencies]
@@ -10,11 +38,16 @@ duckdb = ["duckdb>=1.0"]
 postgres = ["psycopg[binary]>=3.1"]
 all = ["duckdb>=1.0", "psycopg[binary]>=3.1"]
 
+[project.urls]
+Homepage = "https://github.com/Aleixiou/parity"
+Repository = "https://github.com/Aleixiou/parity"
+Issues = "https://github.com/Aleixiou/parity/issues"
+
 [project.scripts]
 parity = "parity.cli:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
