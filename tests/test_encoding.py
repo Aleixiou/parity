@@ -1250,3 +1250,31 @@ def test_the_largest_and_smallest_keys_are_not_skipped(tmp_path):
     finally:
         a.close()
         b.close()
+
+
+def test_the_contributor_guide_lists_exactly_the_abstract_methods():
+    """CONTRIBUTING.md tells a dialect author what they must implement.
+
+    It had already drifted once - `wide_int` was added to the contract and the
+    guide still showed eight methods, while listing `columns` as something you
+    write when the base class had taken it over. A contributor following a
+    stale contract discovers the mismatch as a TypeError at instantiation,
+    which is a poor welcome.
+    """
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    base = (root / "src" / "parity" / "dialects" / "base.py").read_text(encoding="utf-8")
+    guide = (root / "CONTRIBUTING.md").read_text(encoding="utf-8")
+
+    in_code = set(re.findall(r"@abstractmethod\s*\n\s*def (\w+)", base))
+    # The guide's contract block indents its methods by exactly four spaces.
+    in_guide = set(re.findall(r"^    def (\w+)\(", guide, re.M))
+
+    assert in_code, "no abstract methods found - the regex or the file moved"
+    assert in_code == in_guide, (
+        f"CONTRIBUTING.md is out of step with the Dialect contract.\n"
+        f"  only in code:  {sorted(in_code - in_guide)}\n"
+        f"  only in guide: {sorted(in_guide - in_code)}"
+    )

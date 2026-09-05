@@ -13,26 +13,37 @@ rather than working around it.
 
 ### What you implement
 
+Nine methods, all abstract:
+
 ```python
 class Dialect(ABC):
     name: str
+    default_schema: str                           # "public", "main", ...
+
     def connect(self, connection_string: str) -> None: ...
     def close(self) -> None: ...
     def query(self, sql: str) -> list[tuple]: ...
-    def columns(self, table: str) -> list[Column]: ...
     def quote(self, identifier: str) -> str: ...
     def normalize(self, column: Column) -> str:   # canonical text, null-safe
     def hash_expr(self, text_expr: str) -> str:   # -> 60-bit integer
     def int_div(self, num: str, den: str) -> str: # truncating division
     def sum_wide(self, expr: str) -> str:         # overflow-safe sum
+    def wide_int(self, expr: str) -> str:         # widen past 64 bits
 ```
 
-The base class already builds the row text, the per-segment checksum query, and
-the small-range fetch on top of those. Read
+Everything else is inherited and you should not need to touch it: the base
+class introspects columns from `information_schema` (override `columns` only if
+your engine has no such view), builds the row text, the per-segment checksum
+query and the small-range fetch, and splits `schema.table`. Two optional hooks
+have sensible defaults — `cancel()` for aborting an in-flight query from
+another thread, and `_exists_but_unreadable()` for engines whose catalog hides
+tables the current role lacks privileges on.
+
+That comes to roughly 70–85 lines. Read
 `src/parity/dialects/duckdb_dialect.py` first — it is the shortest complete
 example.
 
-### The five things that will bite you
+### The six things that will bite you
 
 Each of these cost real time to discover. They are documented at length in
 `CLAUDE.md` §4; the short version:
@@ -63,6 +74,14 @@ Each of these cost real time to discover. They are documented at length in
 
 5. **Prefer summing to XOR.** `bit_xor` exists in most engines and silently
    cancels duplicate rows, which is precisely the difference you need to see.
+
+6. **`wide_int` has to widen the key *before* the arithmetic, not after.** The
+   bucket expression computes `(key - lo) * n_segments`, and a key range as
+   wide as bigint overflows in three separate places. `wide_int(k - lo)` looks
+   right and does nothing, because the subtraction already happened in the
+   column's own type. Return something that survives 128 bits — `hugeint`,
+   `numeric`, `NUMERIC(38,0)` — and check `int_div` still truncates on that
+   type rather than producing a scaled or rounded result.
 
 ### Proving it works
 
