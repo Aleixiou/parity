@@ -1,6 +1,7 @@
 *.duckdb
 *.egg-info/
 *.pyc
+.coverage
 .idea/
 .pytest_cache/
 .venv/
@@ -9,3 +10,4 @@ build/
 demo/data/
 dist/
 e2e.duckdb
+htmlcov/
