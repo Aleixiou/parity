@@ -101,7 +101,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.expect_planted:
             found = sorted((d.key, d.kind) for d in result.diffs)
             want = expected_planted(result.stats.rows_compared_b)
-            assert found == want, f"\n  expected {want}\n  found    {found}"
+            if found != want:
+                # Never dump the whole list. A dataset that got rebuilt or
+                # clobbered underneath the benchmark produces hundreds of
+                # thousands of differences, and the traceback then runs to
+                # hundreds of megabytes.
+                shown = found[:10]
+                more = f" ... and {len(found) - 10:,} more" if len(found) > 10 else ""
+                raise AssertionError(
+                    f"\n  expected {len(want)}: {want}"
+                    f"\n  found    {len(found)}: {shown}{more}"
+                    f"\n  (counts wildly off usually means the dataset was "
+                    f"rebuilt or clobbered - rerun demo/generate.py)"
+                )
             null_trap = next(d for d in result.diffs if d.key == plant_keys(
                 result.stats.rows_compared_b)["null_trap"])
             assert null_trap.columns == ["note"], null_trap.columns

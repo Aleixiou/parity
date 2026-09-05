@@ -16,7 +16,22 @@ class PostgresDialect(Dialect):
 
         # psycopg understands postgres:// and postgresql:// URLs directly.
         self._conn = psycopg.connect(connection_string)
+        # Read-only by construction (CLAUDE.md section 6). Enforced by the
+        # server, so no bug in query building can write to a user's database.
         self._conn.read_only = True
+        # REPEATABLE READ gives the whole diff one snapshot. Under the default
+        # READ COMMITTED every statement sees a fresh snapshot, so a table
+        # written to during the walk is a different table at each bisection
+        # level - and the tool can then report a difference that never existed
+        # at any single point in time, or descend into a range that has since
+        # changed. The source side of a migration is live by definition, which
+        # makes this the normal case rather than an edge case.
+        #
+        # The cost is one held snapshot for the duration of the diff, which
+        # delays vacuuming dead tuples. At tens of seconds that is the same
+        # cost as any analytical query, and far cheaper than an untrustworthy
+        # verdict.
+        self._conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
 
     def close(self) -> None:
         self._conn.close()

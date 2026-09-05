@@ -240,7 +240,15 @@ def test_the_key_range_is_walked_with_no_gaps(pg, pg_tables, duck, pg_url):
     finally:
         con.close()
 
-    result = diff(pg, duck, table, "main.orders", "id", threshold=100)
+    # A fresh connection: the module-scoped `pg` dialect holds a REPEATABLE
+    # READ snapshot taken before this table existed, so it genuinely cannot
+    # see it. That is the snapshot working, not a bug - but it means a
+    # long-lived Dialect only ever sees the database as of its first query.
+    fresh = open_pg(pg_url, side="A")
+    try:
+        result = diff(fresh, duck, table, "main.orders", "id", threshold=100)
+    finally:
+        fresh.close()
     # Side B has N rows, side A only 2000: 2000 changed plus the rest missing.
     changed = [d for d in result.diffs if d.kind == "different"]
     missing = [d for d in result.diffs if d.kind == "only_in_b"]
@@ -305,3 +313,63 @@ def test_cli_json_across_engines(pg_url, pg_tables, duck_path):
     assert d["a"] == {"note": ""}
     assert d["b"] == {"note": "\\N"}
     assert payload["stats"]["rows_a"] == N
+
+
+# ---------------------------------------------------------------------------
+# Snapshot consistency
+# ---------------------------------------------------------------------------
+
+
+def test_the_walk_sees_one_consistent_snapshot(pg_url, duck):
+    """A live source table must not change underneath the bisection.
+
+    Under PostgreSQL's default READ COMMITTED every statement gets a fresh
+    snapshot, so the checksums at one bisection level describe a different
+    table than the level below. The tool could then report a difference that
+    never existed at any single moment. The source side of a migration is live
+    by definition, so this is the normal case, not an edge case.
+    """
+    import psycopg
+
+    writer = psycopg.connect(pg_url, autocommit=True)
+    table = f"{PG_SCHEMA}_it.o_snapshot"
+    try:
+        writer.execute(f"drop table if exists {table}")
+        writer.execute(f"create table {table} as {SELECT.format(n=1000)}")
+
+        reader = open_pg(pg_url, side="A")
+        try:
+            cols = [c for c in reader.columns(table) if c.name != "id"]
+            before = reader.key_stats(table, "id")
+
+            # Someone writes to the table mid-walk.
+            writer.execute(
+                f"insert into {table} values (999999, 1, 1.00, 'paid', false, "
+                f"timestamp '2024-01-01 00:00:00', 'inserted mid-walk')"
+            )
+            writer.execute(f"update {table} set status = 'CHANGED' where id = 500")
+
+            after = reader.key_stats(table, "id")
+            sums = reader.segment_checksums(table, "id", cols, 1, 1_000_001, 1)
+
+            assert after.rows == before.rows == 1000, (
+                "the walk saw the row count change underneath it"
+            )
+            assert sums[0][0] == 1000, "a later query saw the mid-walk insert"
+        finally:
+            reader.close()
+    finally:
+        writer.execute(f"drop table if exists {table}")
+        writer.close()
+
+
+def test_the_connection_refuses_writes(pg_url):
+    """Read-only by construction, enforced by the server."""
+    import psycopg
+
+    d = open_pg(pg_url, side="A")
+    try:
+        with pytest.raises(psycopg.errors.ReadOnlySqlTransaction):
+            d.query("create table parity_should_not_exist (x integer)")
+    finally:
+        d.close()

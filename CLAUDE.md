@@ -196,14 +196,16 @@ Re-measured at **10,000,000 rows per side**, PostgreSQL 18.4 (native, Windows)
 ↔ DuckDB 1.5.5, via `demo/benchmark.py`:
 
 ```
-identical tables      4 queries        0 rows downloaded (0.0000%)   19.8s
-5 planted diffs      28 queries    7,628 rows downloaded (0.0381%)   38.4s
+identical tables      4 queries        0 rows downloaded (0.0000%)   21.0s
+5 planted diffs      28 queries    7,628 rows downloaded (0.0381%)   41.3s
 ```
 
 The five planted differences are a changed decimal, a deleted row, an inserted
 row at key 999,999,999, a NULL turned into `''`, and a FALSE turned into NULL.
 All five are found exactly, with no false positives, while 0.0381% of the two
-tables crosses the network. Times are the median of three runs.
+tables crosses the network. Times are the median of three runs, and include
+the unconditional `wide_int` widening (§4.5) and PostgreSQL's REPEATABLE READ
+snapshot (§4.8); an earlier build without either measured 19.8s and 38.4s.
 
 **An index on the key column makes no difference** — measured 6.54s without
 versus 7.39s with at 2M, and 38.8s without versus 37.3s with at 10M: noise in
@@ -241,6 +243,35 @@ confirmed:
   trips, not scans
 - `bucket_bounds()` was verified against the SQL bucket expression for every
   key across randomised `(lo, hi, n)` combinations
+
+### 4.8 Transaction isolation — the source table is live
+
+PostgreSQL's default READ COMMITTED gives **every statement its own snapshot**.
+The walk issues one checksum query per level, so under the default the level-2
+checksums describe a different table than the level-1 checksums did. A row
+inserted mid-walk can be counted at one level and missing at the next, and the
+tool then reports a difference that never existed at any single point in time.
+
+This is not an edge case. During a migration the legacy side is still serving
+traffic — a live source table is the normal case.
+
+Verified: with a 1,000-row table, running `key_stats`, then inserting a row from
+another connection, then running `key_stats` again returned 1,000 and then 1,001
+from the same dialect object.
+
+So the PostgreSQL dialect sets `isolation_level = REPEATABLE_READ` at connect
+time, giving the entire diff one snapshot. DuckDB is opened read-only and needs
+no equivalent.
+
+Two consequences worth knowing:
+
+- The snapshot is taken at the dialect's **first query**, not at connect. A
+  long-lived `Dialect` object therefore only ever sees the database as of that
+  first query — a table created afterwards is invisible to it. The CLI opens
+  fresh connections per run, so this only bites library users and tests.
+- The snapshot is held for the whole diff, which delays vacuuming dead tuples.
+  At tens of seconds that is the cost of any analytical query, and far cheaper
+  than a verdict nobody can trust.
 
 ## 5. Architecture
 

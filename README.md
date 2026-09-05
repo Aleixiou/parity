@@ -19,7 +19,7 @@ parity diff \
 
 ```
 ✗ 5 differences in 10,000,000 rows
-  28 queries · 7,628 rows downloaded (0.04% of both tables) · 38.4s
+  28 queries · 7,628 rows downloaded (0.04% of both tables) · 41.3s
   1 only in A · 1 only in B · 3 different
 
   only in A   key 999999999
@@ -53,8 +53,8 @@ whether the table has ten thousand rows or ten million.
 
 | Scenario | Queries | Rows downloaded | Wall time |
 |---|---|---|---|
-| identical tables | 4 | **0** (0.0000%) | 19.8s |
-| 5 planted differences | 28 | 7,628 (0.0381%) | 38.4s |
+| identical tables | 4 | **0** (0.0000%) | 21.0s |
+| 5 planted differences | 28 | 7,628 (0.0381%) | 41.3s |
 
 The five planted differences — a changed decimal, a deleted row, an inserted
 row at key 999,999,999, a `NULL` turned into `''`, and a `FALSE` turned into

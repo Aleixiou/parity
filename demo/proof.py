@@ -12,6 +12,9 @@ N = 200_000
 # CLAUDE.md section 7 documents the Docker container on port 55432. This machine
 # runs a native PostgreSQL install on 5432, so the endpoint is overridable.
 PG = os.environ.get("PARITY_TEST_PG", "postgres://parity:parity@127.0.0.1:5432/parity")
+# A table name of this script's own: demo/generate.py owns `orders` in the
+# same database, and this script drops and recreates whatever it is given.
+TABLE = "parity_proof_orders"
 DUCK = "duckdb:///./e2e.duckdb"
 
 if os.path.exists("e2e.duckdb"): os.remove("e2e.duckdb")
@@ -31,19 +34,19 @@ dck_sql = SELECT.format(series=f"generate_series(1,{N}) as s(i)")
 
 t0 = time.perf_counter()
 d = duckdb.connect("e2e.duckdb")
-d.execute(f"create table orders as {dck_sql}")
+d.execute(f"create table {TABLE} as {dck_sql}")
 d.close()
 pg = psycopg.connect(PG)
 with pg.cursor() as c:
-    c.execute("drop table if exists orders")
-    c.execute(f"create table orders as {pg_sql}")
-    c.execute("alter table orders add primary key (id)")   # index matters, see below
+    c.execute(f"drop table if exists {TABLE}")
+    c.execute(f"create table {TABLE} as {pg_sql}")
+    c.execute(f"alter table {TABLE} add primary key (id)")   # index matters, see below
 pg.commit()
 print(f"loaded {N:,} rows into both engines in {time.perf_counter()-t0:.1f}s")
 
 def run(label):
     a = get_dialect(PG); b = get_dialect(DUCK)
-    r = diff(a, b, "public.orders", "main.orders", "id")
+    r = diff(a, b, f"public.{TABLE}", f"main.{TABLE}", "id")
     s = r.stats
     pct = 100 * s.rows_downloaded / max(N, 1)
     print(f"\n--- {label} ---")
@@ -62,10 +65,10 @@ assert r1.stats.rows_downloaded == 0, "downloaded rows despite a clean match"
 # plant differences
 pg2 = psycopg.connect(PG)
 with pg2.cursor() as c:
-    c.execute("update orders set amount = amount + 0.01 where id = 120455")   # changed value
-    c.execute("delete from orders where id = 47")                             # only in B
-    c.execute("insert into orders values (999999999, 1, 1.00, 'paid', false, timestamp '2024-01-01', 'extra')")  # only in A
-    c.execute("update orders set note = '' where id = 13")                    # NULL vs '' trap
+    c.execute(f"update {TABLE} set amount = amount + 0.01 where id = 120455")   # changed value
+    c.execute(f"delete from {TABLE} where id = 47")                             # only in B
+    c.execute(f"insert into {TABLE} values (999999999, 1, 1.00, 'paid', false, timestamp '2024-01-01', 'extra')")  # only in A
+    c.execute(f"update {TABLE} set note = '' where id = 13")                    # NULL vs '' trap
 pg2.commit()
 
 r2 = run("PLANTED DIFFERENCES (must find exactly 4)")
