@@ -97,7 +97,8 @@ contract. All 17 cases below were verified to agree exactly.
 |---|---|---|
 | INTEGER | `cast(c as varchar)` | `(c)::text` |
 | DECIMAL | `cast(cast(c as decimal(38,6)) as varchar)` | `cast(round((c)::numeric, 6) as text)` |
-| FLOAT | `cast(cast(c as decimal(38,6)) as varchar)` | `cast(round((c)::numeric, 6) as text)` |
+| FLOAT (finite) | `cast(cast(c as decimal(38,6)) as varchar)` | `cast(round((c)::numeric, 6) as text)` |
+| FLOAT (non-finite) | `case when isinf(c) … 'Infinity'/'-Infinity' when isnan(c) then 'NaN'` | `case when c = 'Infinity'::float8 … when c = 'NaN'::float8 then 'NaN'` |
 | BOOLEAN | `case when c then 'true' when not c then 'false' end` | `case when c then 'true' when not c then 'false' end` |
 | STRING | `cast(c as varchar)` | `(c)::text` |
 | DATE | `strftime(c, '%Y-%m-%d')` | `to_char(c, 'YYYY-MM-DD')` |
@@ -106,6 +107,19 @@ contract. All 17 cases below were verified to agree exactly.
 Verified agreeing values include: `1.5 → "1.500000"`, `-0.125 → "-0.125000"`,
 `1/3 → "0.333333"`, `2024-02-29 13:04:05.123456` round-trips exactly,
 `2024-01-01 00:00:00 → "2024-01-01 00:00:00.000000"`, and full Unicode strings.
+
+**Infinity and NaN must be special-cased for FLOAT.** DuckDB cannot cast them
+to DECIMAL at all — `Could not cast value inf to DECIMAL(38,6)` kills the whole
+diff — while PostgreSQL renders them happily. Any division by zero produces one,
+so this is ordinary data, not an exotic case. Both dialects now emit the fixed
+tokens `Infinity`, `-Infinity`, `NaN`. Note PostgreSQL cannot detect NaN with
+`c <> c`: it deliberately treats NaN as equal to itself, unlike IEEE 754, so the
+test must be `c = 'NaN'::float8`. DECIMAL needs no guard — PostgreSQL `numeric`
+renders NaN as text on its own and DuckDB `DECIMAL` cannot hold one.
+
+**Still unhandled:** a double whose magnitude reaches 1e32 overflows DuckDB's
+`decimal(38,6)` and raises. PostgreSQL's arbitrary-precision `numeric` does not.
+Rare in warehouse data, and it fails loudly rather than silently.
 
 **Known, deliberate limitation:** floats and decimals are compared at 6 decimal
 places. Document this loudly in the README — silent precision assumptions are

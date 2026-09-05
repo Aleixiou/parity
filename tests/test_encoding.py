@@ -73,6 +73,12 @@ VALUE_ROWS: dict[str, list[tuple[int, str, str]]] = {
         (2, "one_third", "0.3333333333333333"),
         (3, "negative", "-2.5"),
         (4, "null", "null"),
+        # Non-finite doubles are ordinary - any division by zero makes one -
+        # and DuckDB cannot cast them to DECIMAL at all, so before they were
+        # handled explicitly the whole diff died on them.
+        (5, "infinity", "cast('Infinity' as double precision)"),
+        (6, "negative_infinity", "cast('-Infinity' as double precision)"),
+        (7, "nan", "cast('NaN' as double precision)"),
     ],
     "enc_boolean": [
         (1, "true", "true"),
@@ -821,3 +827,27 @@ def test_duckdb_sessions_are_pinned_to_utc(duck):
 @pytest.mark.postgres
 def test_postgres_sessions_are_pinned_to_utc(pg):
     assert pg.query("show timezone")[0][0] == "UTC"
+
+
+@pytest.mark.postgres
+def test_non_finite_floats_render_identically(pg, duck):
+    """Infinity and NaN are ordinary in float columns, and DuckDB cannot cast
+    them to DECIMAL - it raised "Could not cast value inf to DECIMAL(38,6)"
+    and killed the whole diff. Both engines must now spell them the same."""
+    for row_id, expected in ((5, "Infinity"), (6, "-Infinity"), (7, "NaN")):
+        a = _normalized(pg, "enc_float", row_id)
+        b = _normalized(duck, "enc_float", row_id)
+        assert a == b == expected, f"row {row_id}: postgres {a!r}, duckdb {b!r}"
+
+
+@pytest.mark.postgres
+def test_non_finite_floats_are_still_distinguishable(pg, duck):
+    """The negative control: rendering them as tokens must not make them all
+    equal to each other, or to a finite value."""
+    tokens = {
+        row_id: _normalized(pg, "enc_float", row_id) for row_id in (1, 5, 6, 7)
+    }
+    assert len(set(tokens.values())) == 4, tokens
+    # And across engines, in both directions.
+    assert _normalized(pg, "enc_float", 5) != _normalized(duck, "enc_float", 6)
+    assert _normalized(duck, "enc_float", 7) != _normalized(pg, "enc_float", 1)

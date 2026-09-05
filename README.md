@@ -141,6 +141,9 @@ stated plainly rather than buried.
   both sides, and the scale in force is printed on every run.
 - **Keys must be unique.** A non-unique key is detected up front and rejected.
   Silently collapsing duplicate rows would hide real differences.
+- **`Infinity` and `NaN`** in float columns are compared as those literal
+  tokens on both sides. A double whose magnitude reaches 1e32 is not supported
+  and fails loudly on DuckDB.
 - **Supported types:** integer, decimal, float, boolean, string, date,
   timestamp. Anything else is compared as raw text and reported as a warning —
   two engines may render the same JSON or array differently for reasons that

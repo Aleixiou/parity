@@ -74,7 +74,19 @@ class DuckDBDialect(Dialect):
         t = column.logical_type
         if t is LogicalType.INTEGER:
             expr = f"cast({c} as varchar)"
-        elif t in (LogicalType.DECIMAL, LogicalType.FLOAT):
+        elif t is LogicalType.FLOAT:
+            # Infinity and NaN cannot be cast to DECIMAL - DuckDB raises
+            # "Could not cast value inf to DECIMAL(38,6)" and the whole diff
+            # dies. They are ordinary in float columns (any division by zero
+            # produces one), so render them as fixed tokens that PostgreSQL
+            # spells the same way.
+            expr = (
+                f"case when isinf({c}) then (case when {c} > 0 then 'Infinity' "
+                f"else '-Infinity' end) "
+                f"when isnan({c}) then 'NaN' "
+                f"else cast(cast({c} as decimal(38,{self.float_scale})) as varchar) end"
+            )
+        elif t is LogicalType.DECIMAL:
             expr = f"cast(cast({c} as decimal(38,{self.float_scale})) as varchar)"
         elif t is LogicalType.BOOLEAN:
             # `else` must not swallow NULL. With `case when c then 'true' else

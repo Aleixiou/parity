@@ -76,7 +76,20 @@ class PostgresDialect(Dialect):
         t = column.logical_type
         if t is LogicalType.INTEGER:
             expr = f"({c})::text"
-        elif t in (LogicalType.DECIMAL, LogicalType.FLOAT):
+        elif t is LogicalType.FLOAT:
+            # PostgreSQL renders these as 'Infinity' / '-Infinity' / 'NaN' on
+            # its own, but spelling them explicitly keeps the two engines
+            # agreeing by construction rather than by coincidence - DuckDB
+            # cannot cast them to DECIMAL at all and needs the same tokens.
+            # Note NaN must be found by equality, not `c <> c`: PostgreSQL
+            # deliberately treats NaN as equal to itself, unlike IEEE 754.
+            expr = (
+                f"case when {c} = 'Infinity'::float8 then 'Infinity' "
+                f"when {c} = '-Infinity'::float8 then '-Infinity' "
+                f"when {c} = 'NaN'::float8 then 'NaN' "
+                f"else cast(round(({c})::numeric, {self.float_scale}) as text) end"
+            )
+        elif t is LogicalType.DECIMAL:
             expr = f"cast(round(({c})::numeric, {self.float_scale}) as text)"
         elif t is LogicalType.BOOLEAN:
             # `else` must not swallow NULL. With `case when c then 'true' else
