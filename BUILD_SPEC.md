@@ -280,8 +280,7 @@ Do not build these during the spike, but design so they remain possible:
   once the core is proven
 - sampling mode for approximate fast checks
 - a dbt integration (`--select` a model, diff prod vs PR)
-- continuous parity monitoring during a migration — this is the commercial shape,
-  not the open-source tool
+- continuous parity monitoring during a migration
 
 ## Definition of done for the two-week spike
 
