@@ -19,7 +19,7 @@ parity diff \
 
 ```
 ✗ 5 differences in 10,000,000 rows
-  28 queries · 7,628 rows downloaded (0.04% of both tables) · 48.9s
+  28 queries · 7,628 rows downloaded (0.04% of both tables) · 54.2s
   1 only in A · 1 only in B · 3 different
 
   only in A   key 999999999
@@ -53,8 +53,8 @@ on one developer laptop (`demo/benchmark.py`):
 
 | Scenario | Queries | Rows downloaded | Wall time |
 |---|---|---|---|
-| identical tables | 4 | **0** (0.0000%) | ~25s |
-| 5 planted differences | 28 | 7,628 (0.0381%) | ~49s |
+| identical tables | 4 | **0** (0.0000%) | 26.9s |
+| 5 planted differences | 28 | 7,628 (0.0381%) | 54.2s |
 
 The query count and the rows-downloaded figures are **exact and
 hardware-independent** — they are properties of the algorithm, and the test
