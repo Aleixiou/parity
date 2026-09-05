@@ -116,6 +116,14 @@ class Dialect(ABC):
     # ------------------------------------------------------------ building
 
     def row_text(self, columns: Sequence[Column]) -> str:
+        if not columns:
+            # Two tables can legitimately share only their key - after
+            # `--columns`/`--exclude`, or when the schemas have diverged
+            # entirely. `concat_ws(chr(31), )` is a syntax error, so render a
+            # constant instead. Row *contents* then always match, while
+            # `count(*)` in the same checksum query still catches rows present
+            # on one side only, which is the only difference left to find.
+            return "''"
         parts = ", ".join(self.normalize(c) for c in columns)
         return f"concat_ws({SEPARATOR_SQL}, {parts})"
 
@@ -195,9 +203,11 @@ class Dialect(ABC):
         and only once they are small enough to be cheap.
         """
         k = self.quote(key)
-        exprs = ", ".join(self.normalize(c) for c in columns)
+        # With no comparable columns the row tuple is empty and only key
+        # presence distinguishes the sides - see `row_text`.
+        exprs = "".join(", " + self.normalize(c) for c in columns)
         sql = (
-            f"select {k}, {exprs} from {self.qualify(table)} "
+            f"select {k}{exprs} from {self.qualify(table)} "
             f"where {k} >= {lo} and {k} < {hi} order by {k}"
         )
         out: dict[int, tuple[str, ...]] = {}
