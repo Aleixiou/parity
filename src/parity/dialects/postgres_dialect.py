@@ -15,7 +15,19 @@ class PostgresDialect(Dialect):
         import psycopg
 
         # psycopg understands postgres:// and postgresql:// URLs directly.
-        self._conn = psycopg.connect(connection_string)
+        self._conn = psycopg.connect(connection_string, autocommit=True)
+        # Pin the session to UTC before anything else. `timestamptz` renders
+        # through the *session* timezone, so two sides whose sessions differ
+        # render the same instant as different text and every row with a
+        # timestamptz reports as changed - a false positive that looks exactly
+        # like catastrophic data loss. A timestamptz is an instant; comparing
+        # instants in UTC is both correct and deterministic. Naive `timestamp`
+        # columns carry no zone and are unaffected.
+        #
+        # Done while autocommit is still on, so it applies to the session
+        # rather than to a transaction that later rolls back.
+        self._conn.execute("set time zone 'UTC'")
+        self._conn.autocommit = False
         # Read-only by construction (CLAUDE.md section 6). Enforced by the
         # server, so no bug in query building can write to a user's database.
         self._conn.read_only = True

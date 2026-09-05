@@ -147,8 +147,11 @@ stated plainly rather than buried.
   have nothing to do with the data.
 - **`--max-diffs` makes the result partial**, and says so: the run is flagged
   `truncated`, and `identical` is never true. It does not mean the rest matched.
-- **Timezone-aware timestamps** are compared in whatever the session timezone
-  renders. Compare `timestamptz` columns with care.
+- **Timezone-aware timestamps are compared as instants, in UTC.** Both
+  sessions are pinned to UTC on connect, so the same instant matches whatever
+  the two servers' default timezones are. Without that pin, two sides in
+  different zones render every `timestamptz` differently and the tool reports
+  the entire table as changed.
 - Columns present on only one side are skipped with a warning, not treated as
   differences.
 

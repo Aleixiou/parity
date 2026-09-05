@@ -21,6 +21,7 @@ class DuckDBDialect(Dialect):
             # An in-memory database holds no user data to protect, and a
             # read-only in-memory database is empty by definition.
             self._conn = duckdb.connect(":memory:")
+            self._pin_utc()
             return
         if not os.path.exists(path):
             # read_only=True on a missing path fails with a driver-level error
@@ -30,6 +31,19 @@ class DuckDBDialect(Dialect):
         # connection means no bug in query building can ever write to a user's
         # database. It also lets several parity runs share one file.
         self._conn = duckdb.connect(path, read_only=True)
+        self._pin_utc()
+
+    def _pin_utc(self) -> None:
+        """Render `timestamptz` in UTC regardless of the machine's timezone.
+
+        A timestamptz renders through the session timezone, so two sides whose
+        sessions differ turn the same instant into different text and every row
+        holding one reports as changed - a false positive indistinguishable
+        from catastrophic data loss. A timestamptz is an instant; comparing
+        instants in UTC is correct and deterministic. Naive `timestamp` columns
+        carry no zone and are unaffected.
+        """
+        self._conn.execute("set TimeZone='UTC'")
 
     def close(self) -> None:
         self._conn.close()

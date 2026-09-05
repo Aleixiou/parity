@@ -205,7 +205,7 @@ row at key 999,999,999, a NULL turned into `''`, and a FALSE turned into NULL.
 All five are found exactly, with no false positives, while 0.0381% of the two
 tables crosses the network. Times are the median of three runs, and include
 the unconditional `wide_int` widening (§4.5) and PostgreSQL's REPEATABLE READ
-snapshot (§4.8); an earlier build without either measured 19.8s and 38.4s.
+snapshot (§4.9); an earlier build without either measured 19.8s and 38.4s.
 
 **An index on the key column makes no difference** — measured 6.54s without
 versus 7.39s with at 2M, and 38.8s without versus 37.3s with at 10M: noise in
@@ -244,7 +244,33 @@ confirmed:
 - `bucket_bounds()` was verified against the SQL bucket expression for every
   key across randomised `(lo, hi, n)` combinations
 
-### 4.8 Transaction isolation — the source table is live
+### 4.8 Session timezone — pin it to UTC or cry wolf on every row
+
+`timestamptz` renders through the **session** timezone, and
+`information_schema` reports it as `timestamp with time zone` on PostgreSQL and
+`TIMESTAMP WITH TIME ZONE` on DuckDB, both of which `map_type` folds onto
+TIMESTAMP by prefix. So the canonical text for one instant depends on where the
+session happens to be.
+
+Verified: two tables holding the identical instants `2024-06-15 12:00:00+00`
+and `2024-01-15 12:00:00+00`, with side A's session in `America/New_York` and
+side B's in `Asia/Tokyo`, rendered `08:00:00` against `21:00:00` and reported
+**every row as different**. On a real table that is a false positive
+indistinguishable from catastrophic data loss.
+
+Both dialects therefore pin their session to UTC at connect:
+
+| Engine | Statement |
+|---|---|
+| PostgreSQL | `set time zone 'UTC'` (while autocommit is still on, so it is a *session* setting and not one a rolled-back transaction discards) |
+| DuckDB | `set TimeZone='UTC'` |
+
+A `timestamptz` is an instant, so comparing instants is the correct semantics,
+and UTC makes the rendering deterministic. Naive `timestamp` columns carry no
+zone and are unaffected — verified against a database whose own default was set
+to `Asia/Tokyo` while the other side sat in `Europe/Zurich`.
+
+### 4.9 Transaction isolation — the source table is live
 
 PostgreSQL's default READ COMMITTED gives **every statement its own snapshot**.
 The walk issues one checksum query per level, so under the default the level-2

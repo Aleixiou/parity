@@ -811,3 +811,13 @@ def test_a_three_part_table_name_is_refused_rather_than_guessed():
         PostgresDialect(side="A").split_table("db.public.orders", "public")
     msg = str(exc.value)
     assert "3 dot-separated parts" in msg and "side A" in msg
+
+
+@pytest.mark.duckdb
+def test_duckdb_sessions_are_pinned_to_utc(duck):
+    assert duck.query("select current_setting('TimeZone')")[0][0] == "UTC"
+
+
+@pytest.mark.postgres
+def test_postgres_sessions_are_pinned_to_utc(pg):
+    assert pg.query("show timezone")[0][0] == "UTC"

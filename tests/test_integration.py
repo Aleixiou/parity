@@ -373,3 +373,90 @@ def test_the_connection_refuses_writes(pg_url):
             d.query("create table parity_should_not_exist (x integer)")
     finally:
         d.close()
+
+
+# ---------------------------------------------------------------------------
+# Timezone-aware timestamps
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def tz_tables(pg_url, tmp_path_factory):
+    """The same two instants on both sides, plus one genuinely shifted row."""
+    import psycopg
+
+    path = str(tmp_path_factory.mktemp("tz") / "tz.duckdb")
+    con = duckdb_write(path)
+    con.execute("create table tz (id bigint, ts timestamptz)")
+    con.execute(
+        "insert into tz values "
+        "(1, timestamptz '2024-06-15 12:00:00+00'), "
+        "(2, timestamptz '2024-01-15 12:00:00+00'), "
+        "(3, timestamptz '2024-03-01 09:00:00+00')"
+    )
+    con.close()
+
+    table = f"{PG_SCHEMA}_it.tz"
+    writer = psycopg.connect(pg_url, autocommit=True)
+    try:
+        writer.execute(f"drop table if exists {table}")
+        writer.execute(f"create table {table} (id bigint, ts timestamptz)")
+        writer.execute(
+            f"insert into {table} values "
+            f"(1, timestamptz '2024-06-15 12:00:00+00'), "
+            # Same instant, written with a different offset. Must still match.
+            f"(2, timestamptz '2024-01-15 13:00:00+01'), "
+            # A genuinely different instant: the negative control.
+            f"(3, timestamptz '2024-03-01 10:00:00+00')"
+        )
+    finally:
+        writer.close()
+    return table, path
+
+
+def test_the_same_instant_matches_whatever_the_server_timezones_are(
+    pg_url, tz_tables
+):
+    """`timestamptz` renders through the *session* timezone.
+
+    Two sides whose sessions differ turn one instant into different text, so
+    every row holding a timestamptz reports as changed - a false positive
+    indistinguishable from catastrophic data loss. Both dialects therefore pin
+    their session to UTC. Verified here against a database whose own default is
+    deliberately set to the other side of the world.
+    """
+    import psycopg
+
+    table, duck_path = tz_tables
+    admin = psycopg.connect(pg_url, autocommit=True)
+    dbname = admin.info.dbname
+    try:
+        admin.execute(f'alter database "{dbname}" set timezone to \'Asia/Tokyo\'')
+
+        a = open_pg(pg_url, side="A")
+        b = open_duckdb(duck_path, side="B")
+        try:
+            assert a.query("show timezone")[0][0] == "UTC"
+            assert b.query("select current_setting('TimeZone')")[0][0] == "UTC"
+
+            result = diff(a, b, table, "main.tz", "id")
+            # Rows 1 and 2 are the same instants written with different
+            # offsets, so only row 3 - a genuinely different instant - counts.
+            assert [(d.key, d.kind) for d in result.diffs] == [(3, "different")], (
+                f"expected only the genuinely shifted row, got "
+                f"{[(d.key, d.values_a, d.values_b) for d in result.diffs]}"
+            )
+            assert result.diffs[0].columns == ["ts"]
+        finally:
+            a.close()
+            b.close()
+    finally:
+        admin.execute(f'alter database "{dbname}" reset timezone')
+        admin.close()
+
+
+def test_a_naive_timestamp_is_unaffected_by_the_utc_pin(pg, pg_tables, duck):
+    """Pinning UTC must not disturb `timestamp without time zone`, which
+    carries no zone at all - the clean table is full of them."""
+    result = diff(pg, duck, pg_tables["clean"], "main.orders", "id")
+    assert result.identical
