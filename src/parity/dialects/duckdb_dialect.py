@@ -86,6 +86,10 @@ class DuckDBDialect(Dialect):
         # to DOUBLE and silently lose precision on large key ranges.
         return f"(({numerator}) // ({denominator}))"
 
+    def wide_int(self, expr: str) -> str:
+        # hugeint is 128-bit, which the key offset cannot overflow.
+        return f"cast(({expr}) as hugeint)"
+
     def sum_wide(self, expr: str) -> str:
         # DECIMAL(38,0) holds sums far beyond any realistic row count * 2^60.
         return f"coalesce(sum(cast(({expr}) as decimal(38,0))), 0)"

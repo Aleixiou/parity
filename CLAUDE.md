@@ -155,8 +155,26 @@ on PostgreSQL, `main` on DuckDB.
 
 - **`/` is not portable.** PostgreSQL truncates on integer operands; DuckDB
   promotes to double. Integer division must go through a dialect method
-  (`int_div`): PostgreSQL `(a / b)`, DuckDB `(a // b)`. Do **not** work around
-  this with `floor(a/b)` — double precision silently breaks on large key ranges.
+  (`int_div`): PostgreSQL `div(a::numeric, b::numeric)`, DuckDB `(a // b)`. Do
+  **not** work around this with `floor(a/b)` — double precision silently breaks
+  on large key ranges. PostgreSQL's plain `/` is correct for two bigints but
+  returns a *scaled, rounded* result once either operand is numeric, which is
+  exactly the case below; `div()` is the exact integer quotient and truncates
+  toward zero, matching DuckDB's `//` for the non-negative operands used here.
+- **The bucket expression overflows int64 on wide key ranges.** It computes
+  `(key - lo) * n_segments`, and `span * n_segments` passes 2^63 once the span
+  is wider than about 2.9e17. That is ordinary for sparse bigint keys and
+  guaranteed the moment keys are hashed into the full bigint range — which is
+  what the planned non-integer-key support will do. Both engines raise rather
+  than wrap (`bigint out of range` / `Overflow in multiplication of INT64`), so
+  it surfaces as a crash and not a wrong answer, but the walk still dies on a
+  legitimate key space. The key offset is therefore widened before the multiply
+  via a dialect method (`wide_int`): PostgreSQL `::numeric`, DuckDB `hugeint`.
+  This is done **unconditionally**. A version that widened only when the span
+  required it was measured at 10M rows and saved nothing — 39.3s against
+  38.4s, inside run-to-run noise — because the cost is dominated by MD5 over
+  every row. One always-correct path is worth two percent in the one function
+  whose off-by-one would make the walker skip rows and still report a match.
 - `md5()` returns the identical lowercase hex digest in both engines.
 - `concat_ws`, `chr`, `coalesce`, `bit_xor` and ordered `string_agg` all exist
   in both, but prefer summing over XOR: **XOR silently cancels duplicate rows.**

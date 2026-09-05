@@ -663,3 +663,68 @@ def test_row_text_uses_the_unit_separator():
     text = d.row_text(cols)
     assert text.startswith("concat_ws(chr(31), ")
     assert text.count("coalesce(") == 2
+
+
+# --------------------------------------------------------------------------
+# 5. Wide key ranges - the bucket expression must not overflow
+# --------------------------------------------------------------------------
+
+
+def test_the_bucket_expression_always_widens_before_multiplying():
+    """`(key - lo) * n` overflows int64 once the span passes ~2.9e17.
+
+    Widening unconditionally was measured at 10M rows to cost nothing outside
+    noise, because MD5 over every row dominates. One always-correct path beats
+    two paths in the function whose off-by-one would make the walker skip rows.
+    """
+    from parity.dialects.duckdb_dialect import DuckDBDialect
+    from parity.dialects.postgres_dialect import PostgresDialect
+
+    cols = [Column("v", LogicalType.STRING, "varchar")]
+    for dialect, widener in (
+        (DuckDBDialect(), "hugeint"),
+        (PostgresDialect(), "numeric"),
+    ):
+        for hi in (10**9, 2**62):
+            bucket = dialect._segment_sql("t", "id", cols, 0, hi, 32).split(" as seg")[0]
+            assert widener in bucket, (
+                f"{dialect.name} did not widen the key offset for hi={hi}: {bucket}"
+            )
+
+
+@pytest.mark.duckdb
+def test_a_key_span_spanning_the_whole_bigint_range_still_works(tmp_path):
+    """Sparse bigint keys, and every hashed-key scheme, land here.
+
+    Both engines raise on int64 overflow rather than wrapping, so before the
+    fix this was a crash rather than a wrong answer - but a crash on a
+    legitimate key space is still a hole.
+    """
+    import random
+
+    rng = random.Random(11)
+    keys = sorted(rng.randrange(0, 2**62) for _ in range(500))
+    assert (keys[-1] - keys[0] + 1) * 32 > 2**63 - 1, "span too small to test"
+
+    def make(path: str, changed: int | None = None) -> str:
+        con = duckdb_write(path)
+        con.execute("create table t (id bigint, v varchar)")
+        con.executemany(
+            "insert into t values (?, ?)",
+            [(k, "CHANGED" if k == changed else f"v{i}") for i, k in enumerate(keys)],
+        )
+        con.close()
+        return path
+
+    a_path = make(str(tmp_path / "wide_a.duckdb"))
+    b_path = make(str(tmp_path / "wide_b.duckdb"), changed=keys[250])
+
+    from parity.engine import diff
+
+    a, b = open_duckdb(a_path, side="A"), open_duckdb(b_path, side="B")
+    try:
+        result = diff(a, b, "main.t", "main.t", "id")
+        assert [(d.key, d.kind) for d in result.diffs] == [(keys[250], "different")]
+    finally:
+        a.close()
+        b.close()

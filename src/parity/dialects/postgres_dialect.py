@@ -71,9 +71,16 @@ class PostgresDialect(Dialect):
         return f"(('x' || substr(md5({text_expr}), 1, {HASH_HEX_CHARS}))::bit(60)::bigint)"
 
     def int_div(self, numerator: str, denominator: str) -> str:
-        # PostgreSQL's `/` truncates toward zero on integer operands, which is
-        # what we want. Both operands here are non-negative bigints.
-        return f"(({numerator}) / ({denominator}))"
+        # `div()` is PostgreSQL's exact integer quotient and truncates toward
+        # zero, matching Python's `//` for the non-negative operands used here.
+        # Plain `/` is right for bigints but silently yields a scaled, rounded
+        # result once `wide_int` has promoted an operand to numeric - which is
+        # precisely when the bucket boundary has to be exact.
+        return f"div(({numerator})::numeric, ({denominator})::numeric)"
+
+    def wide_int(self, expr: str) -> str:
+        # numeric is arbitrary precision: the key offset cannot overflow it.
+        return f"(({expr})::numeric)"
 
     def sum_wide(self, expr: str) -> str:
         # numeric is arbitrary precision: cannot overflow no matter the row count.

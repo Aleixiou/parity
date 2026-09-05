@@ -187,6 +187,10 @@ class FakeDialect(Dialect):
     def sum_wide(self, expr: str) -> str:  # pragma: no cover
         return f"sum({expr})"
 
+    def wide_int(self, expr: str) -> str:  # pragma: no cover
+        # Python integers are already arbitrary precision.
+        return f"({expr})"
+
     # -- the three operations the engine actually calls ---------------------
 
     def key_stats(self, table: str, key: str) -> KeyStats:
