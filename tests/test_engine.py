@@ -498,3 +498,77 @@ def test_the_engine_never_builds_sql_itself():
 
 def test_row_hash_helper_matches_the_documented_constant():
     assert row_hash("abc") == 648541476951500027
+
+
+# ---------------------------------------------------------------------------
+# 10. Interruption: a long diff must be abortable
+# ---------------------------------------------------------------------------
+
+
+def test_an_interrupt_cancels_both_sides_and_propagates():
+    """Ctrl-C during a walk must reach the databases, not just the process.
+
+    Both sides are queried on worker threads, so the interrupt lands on the
+    main thread while the workers sit blocked in the driver. Without an
+    explicit cancel the pool's shutdown then waits for those queries - which on
+    the long diff someone actually wants to abort is the entire problem.
+    """
+    class Interrupting(FakeDialect):
+        def __init__(self, *args, raise_on_checksums=False, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.raise_on_checksums = raise_on_checksums
+            self.cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+
+        def segment_checksums(self, *args, **kwargs):
+            if self.raise_on_checksums:
+                raise KeyboardInterrupt
+            return super().segment_checksums(*args, **kwargs)
+
+    a = Interrupting(SyntheticTable(10_000), side="A", raise_on_checksums=True)
+    b = Interrupting(SyntheticTable(10_000), side="B")
+
+    with pytest.raises(KeyboardInterrupt):
+        diff(a, b, "a.t", "b.t", "id")
+
+    assert a.cancelled and b.cancelled, (
+        "both sides must be cancelled, not only the one that raised"
+    )
+
+
+def test_a_failing_cancel_does_not_replace_the_real_error():
+    """Diagnosing an interrupt must never lose the interrupt."""
+    class Broken(FakeDialect):
+        def cancel(self):
+            raise RuntimeError("cancel itself is broken")
+
+        def key_stats(self, table, key):
+            raise KeyboardInterrupt
+
+    a = Broken(SyntheticTable(10), side="A")
+    b = Broken(SyntheticTable(10), side="B")
+    with pytest.raises(KeyboardInterrupt):
+        diff(a, b, "a.t", "b.t", "id")
+
+
+def test_gather_returns_both_results_in_order():
+    """The polling wait must behave exactly like waiting on both futures."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from parity.engine import _gather
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fa = pool.submit(lambda: "a")
+        fb = pool.submit(lambda: "b")
+        assert _gather(fa, fb) == ("a", "b")
+
+        # An exception on either side still propagates rather than looping.
+        def boom():
+            raise ValueError("side failed")
+
+        fa = pool.submit(boom)
+        fb = pool.submit(lambda: "b")
+        with pytest.raises(ValueError, match="side failed"):
+            _gather(fa, fb)

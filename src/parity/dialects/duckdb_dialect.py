@@ -46,6 +46,9 @@ class DuckDBDialect(Dialect):
         """
         self._conn.execute("set TimeZone='UTC'")
 
+    def cancel(self) -> None:
+        self._conn.interrupt()
+
     def close(self) -> None:
         self._conn.close()
 

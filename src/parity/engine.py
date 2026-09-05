@@ -13,7 +13,9 @@ differ, and only once those ranges are small.
 from __future__ import annotations
 
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
+from contextlib import contextmanager
 from typing import Sequence
 
 from parity.dialects.base import Dialect, require_matching_scales
@@ -43,6 +45,52 @@ def bucket_bounds(i: int, lo: int, hi: int, n: int) -> tuple[int, int]:
     b_lo = lo + -(-(i * span) // n)
     b_hi = lo + -(-((i + 1) * span) // n)
     return b_lo, b_hi
+
+
+#: How often the main thread wakes while waiting on the two sides.
+_POLL_SECONDS = 0.2
+
+
+def _gather(fa: Future, fb: Future):
+    """Wait for both sides, staying interruptible while doing so.
+
+    ``Future.result()`` with no timeout blocks in a lock acquire that Windows
+    will not deliver a KeyboardInterrupt through, so Ctrl-C is not noticed
+    until the query returns on its own - measured at 17 seconds into a 40
+    second diff. Passing a timeout makes the wait a series of short sleeps the
+    interrupt can land between, at a cost of one cheap wakeup every fifth of a
+    second against queries that run for tens of seconds.
+    """
+    while True:
+        try:
+            return fa.result(timeout=_POLL_SECONDS), fb.result(timeout=_POLL_SECONDS)
+        except FuturesTimeout:
+            continue
+
+
+@contextmanager
+def _cancel_on_interrupt(a: Dialect, b: Dialect):
+    """Turn a Ctrl-C into an actual abort of both in-flight queries.
+
+    Both sides are queried on worker threads, so the interrupt lands on the
+    main thread while the workers sit blocked in the database driver. Exiting
+    the `ThreadPoolExecutor` context then *waits* for those queries to finish -
+    so without this, Ctrl-C on the ten-minute diff someone actually wants to
+    abort does nothing for ten minutes.
+
+    Cancelling makes the workers' queries raise, the threads end, and the pool
+    shuts down promptly. The original KeyboardInterrupt is re-raised either way.
+    """
+    try:
+        yield
+    except BaseException:
+        for side in (a, b):
+            try:
+                side.cancel()
+            except Exception:
+                # A failed cancel must never replace the real exception.
+                pass
+        raise
 
 
 def _select_columns(
@@ -155,13 +203,18 @@ def diff(
 
     # Both sides in parallel from here on. One pool for the whole walk - the
     # comparison is almost entirely IO-wait on two independent engines.
-    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="parity") as pool:
+    # Order matters: context managers exit in reverse, so `_cancel_on_interrupt`
+    # must be the *inner* one. The pool's own exit blocks waiting for its
+    # threads, so cancelling has to happen before that, not after.
+    with ThreadPoolExecutor(
+        max_workers=2, thread_name_prefix="parity"
+    ) as pool, _cancel_on_interrupt(a, b):
 
         def both(fn_name: str, *args_a, _args_b=None):
             fa = pool.submit(getattr(a, fn_name), a_table, *args_a)
             fb = pool.submit(getattr(b, fn_name), b_table, *(_args_b or args_a))
             stats.queries += 2
-            return fa.result(), fb.result()
+            return _gather(fa, fb)
 
         cols_a_list, cols_b_list = both("columns")
         cols_a = {c.name: c for c in cols_a_list}
@@ -254,7 +307,7 @@ def diff(
                 fb = pool.submit(
                     b.segment_checksums, b_table, key, b_cols, s_lo, s_hi, n
                 )
-                cs_a, cs_b = fa.result(), fb.result()
+                cs_a, cs_b = _gather(fa, fb)
                 stats.queries += 2
 
                 differing = [
@@ -319,7 +372,7 @@ def _compare_rows(
     """Download a proven-different range from both sides and diff it locally."""
     fa = pool.submit(a.fetch_range, a_table, key, a_cols, lo, hi)
     fb = pool.submit(b.fetch_range, b_table, key, b_cols, lo, hi)
-    rows_a, rows_b = fa.result(), fb.result()
+    rows_a, rows_b = _gather(fa, fb)
     stats.queries += 2
     stats.rows_downloaded += len(rows_a) + len(rows_b)
 

@@ -79,6 +79,17 @@ class Dialect(ABC):
     @abstractmethod
     def query(self, sql: str) -> list[tuple[Any, ...]]: ...
 
+    def cancel(self) -> None:
+        """Abort whatever query is in flight, from another thread.
+
+        Both sides are queried on worker threads, so a Ctrl-C reaches the main
+        thread while the workers sit blocked on the database. Without this the
+        interrupt is not acted on until the queries finish on their own - which
+        on the ten-minute diff someone actually wants to abort is the whole
+        problem. Optional: a dialect that cannot do it inherits a no-op and
+        simply behaves as before.
+        """
+
     # ------------------------------------------------------------ metadata
 
     #: Where an unqualified table name is looked up. `public` on PostgreSQL,

@@ -19,7 +19,7 @@ parity diff \
 
 ```
 ✗ 5 differences in 10,000,000 rows
-  28 queries · 7,628 rows downloaded (0.04% of both tables) · 41.3s
+  28 queries · 7,628 rows downloaded (0.04% of both tables) · 48.9s
   1 only in A · 1 only in B · 3 different
 
   only in A   key 999999999
@@ -48,13 +48,18 @@ whether the table has ten thousand rows or ten million.
 
 ## Measured
 
-10,000,000 rows per side, PostgreSQL 18.4 ↔ DuckDB 1.5.5, median of three runs
-(`demo/benchmark.py`):
+10,000,000 rows per side, PostgreSQL 18.4 ↔ DuckDB 1.5.5, median of five runs
+on one developer laptop (`demo/benchmark.py`):
 
 | Scenario | Queries | Rows downloaded | Wall time |
 |---|---|---|---|
-| identical tables | 4 | **0** (0.0000%) | 21.0s |
-| 5 planted differences | 28 | 7,628 (0.0381%) | 41.3s |
+| identical tables | 4 | **0** (0.0000%) | ~25s |
+| 5 planted differences | 28 | 7,628 (0.0381%) | ~49s |
+
+The query count and the rows-downloaded figures are **exact and
+hardware-independent** — they are properties of the algorithm, and the test
+suite pins them. The wall times are one machine under sustained load; treat
+them as an order of magnitude, not a specification.
 
 The five planted differences — a changed decimal, a deleted row, an inserted
 row at key 999,999,999, a `NULL` turned into `''`, and a `FALSE` turned into
@@ -62,7 +67,8 @@ row at key 999,999,999, a `NULL` turned into `''`, and a `FALSE` turned into
 
 Cost is roughly **one full hash pass per side**. It is CPU-bound on MD5, not
 IO-bound on key lookup, which is why **an index on the key column makes no
-measurable difference** (38.8s without, 37.3s with). Raising
+measurable difference** (measured at 10M: 38.8s without, 37.3s with).
+Raising
 `--bisection-factor` does not speed up the dominant first pass; it only reduces
 round trips on later levels.
 

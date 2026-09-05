@@ -46,6 +46,11 @@ class PostgresDialect(Dialect):
         # verdict.
         self._conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
 
+    def cancel(self) -> None:
+        # Safe to call from another thread; psycopg opens its own
+        # connection to the server to deliver the cancel request.
+        self._conn.cancel()
+
     def close(self) -> None:
         self._conn.close()
 
