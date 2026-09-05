@@ -1,0 +1,10 @@
+# The sdist shipped `test_*.py` but not `conftest.py` or `fakes.py`, so the
+# tests it carried could not actually run. For a tool whose whole pitch is
+# trustworthiness, a downstream packager has to be able to verify it - so ship
+# a suite that works, or none at all.
+include LICENSE
+include README.md
+include CONTRIBUTING.md
+recursive-include tests *.py
+prune demo/data
+global-exclude __pycache__ *.py[cod]

@@ -2,8 +2,8 @@ name: release
 
 # Publishes to PyPI when a v* tag is pushed.
 #
-# Uses PyPI Trusted Publishing, so there is no API token anywhere in this repo
-# or in GitHub secrets. Before the first release, create a pending publisher at
+# Uses PyPI Trusted Publishing, so no API token exists in this repo or in
+# GitHub secrets. Before the first release, create a pending publisher at
 #   https://pypi.org/manage/account/publishing/
 # for project `parity-diff`, owner `Aleixiou`, repo `parity`, workflow
 # `release.yml`, environment `pypi`.
@@ -11,11 +11,36 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # Lets the build and its checks be rehearsed from a branch. It deliberately
+  # cannot publish - see the `if` on the publish job.
   workflow_dispatch:
 
 jobs:
-  # Never publish something the test suite has not passed.
+  # Seconds, and first: a mistyped tag should not cost a full test matrix.
+  guard:
+    name: tag matches version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: compare the tag against pyproject
+        run: |
+          version=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "pyproject version: $version"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            echo "tag: $tag"
+            if [ "$version" != "$tag" ]; then
+              echo "::error::tag $tag does not match pyproject version $version"
+              exit 1
+            fi
+          fi
+
+  # Never publish something the suite has not passed.
   test:
+    needs: guard
     uses: ./.github/workflows/tests.yml
 
   build:
@@ -29,13 +54,30 @@ jobs:
       - run: pip install build twine
       - run: python -m build
       - run: python -m twine check dist/*
-      - name: the tag must match the version in pyproject
+
+      - name: the built wheel must actually work
+        # twine check validates metadata, not that the artifact runs. Installing
+        # it into a clean environment with only the DuckDB extra also re-proves
+        # that a single-engine user is never handed a PostgreSQL driver.
         run: |
-          version=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          tag="${GITHUB_REF_NAME#v}"
-          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "$version" != "$tag" ]; then
-            echo "tag $tag does not match pyproject version $version"; exit 1
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet "$(ls dist/*.whl)[duckdb]"
+          /tmp/smoke/bin/parity --version
+          /tmp/smoke/bin/parity --help > /dev/null
+          if /tmp/smoke/bin/pip show psycopg > /dev/null 2>&1; then
+            echo "::error::the duckdb extra pulled in a PostgreSQL driver"; exit 1
           fi
+
+      - name: the sdist must carry a suite that runs
+        # It once shipped test_*.py without conftest.py, so the tests it carried
+        # could not run at all. A downstream packager has to be able to verify
+        # this tool, or the trust argument is only words.
+        run: |
+          mkdir -p /tmp/sdist && tar -xzf dist/*.tar.gz -C /tmp/sdist
+          cd /tmp/sdist/*/
+          python -m pip install --quiet -e ".[duckdb]" pytest
+          python -m pytest -q
+
       - uses: actions/upload-artifact@v5
         with:
           name: dist
@@ -43,6 +85,9 @@ jobs:
 
   publish:
     needs: build
+    # Only a real tag publishes. A manual run rehearses everything above and
+    # stops here, so nobody can hand-fire an untagged release.
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
