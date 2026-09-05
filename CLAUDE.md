@@ -247,8 +247,8 @@ Re-measured at **10,000,000 rows per side**, PostgreSQL 18.4 (native, Windows)
 ↔ DuckDB 1.5.5, via `demo/benchmark.py`:
 
 ```
-identical tables      4 queries        0 rows downloaded (0.0000%)   26.9s
-5 planted diffs      28 queries    7,628 rows downloaded (0.0381%)   54.2s
+identical tables      4 queries        0 rows downloaded (0.0000%)   25-31s
+5 planted diffs      28 queries    7,628 rows downloaded (0.0381%)   48-55s
 ```
 
 The five planted differences are a changed decimal, a deleted row, an inserted

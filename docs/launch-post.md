@@ -30,7 +30,11 @@ parity diff \
 
 On 10,000,000 rows per side it proves two identical tables match in **4 queries
 with zero rows downloaded**. With five differences planted, it finds exactly
-those five having moved 0.0381% of the data.
+those five in 28 queries, having moved 0.0381% of the data.
+
+Those counts are properties of the algorithm, so you should reproduce them
+exactly. The wall clock on my laptop is 25-31s and 48-55s respectively, and
+that spread is my machine, not the tool.
 
 That part is just engineering: hash each row inside the engine, compare one
 checksum per bucket of the key range, recurse only into buckets that disagree,

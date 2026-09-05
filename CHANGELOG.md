@@ -24,12 +24,12 @@ either engine.
 
 ### Measured
 
-10,000,000 rows per side, PostgreSQL 18.4 against DuckDB 1.5.5, median of three:
+10,000,000 rows per side, PostgreSQL 18.4 against DuckDB 1.5.5, six runs:
 
 | Scenario | Queries | Rows downloaded | Wall time |
 |---|---|---|---|
-| identical tables | 4 | 0 (0.0000%) | 26.9s |
-| 5 planted differences | 28 | 7,628 (0.0381%) | 54.2s |
+| identical tables | 4 | 0 (0.0000%) | 25-31s |
+| 5 planted differences | 28 | 7,628 (0.0381%) | 48-55s |
 
 Query and row counts are exact and hardware-independent; the times are one
 laptop.

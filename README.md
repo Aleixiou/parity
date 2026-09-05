@@ -19,7 +19,7 @@ parity diff \
 
 ```
 ✗ 5 differences in 10,000,000 rows
-  28 queries · 7,628 rows downloaded (0.04% of both tables) · 54.2s
+  28 queries · 7,628 rows downloaded (0.04% of both tables) · 47.9s
   1 only in A · 1 only in B · 3 different
 
   only in A   key 999999999
@@ -53,8 +53,16 @@ on one developer laptop (`demo/benchmark.py`):
 
 | Scenario | Queries | Rows downloaded | Wall time |
 |---|---|---|---|
-| identical tables | 4 | **0** (0.0000%) | 26.9s |
-| 5 planted differences | 28 | 7,628 (0.0381%) | 54.2s |
+| identical tables | **4** | **0** (0.0000%) | 25–31s |
+| 5 planted differences | **28** | **7,628** (0.0381%) | 48–55s |
+
+**The query counts and row counts are exact and hardware-independent** — they
+are properties of the algorithm, and the test suite pins them. Reproduce them
+and you should get the same integers.
+
+The wall times are a range across six runs on one developer laptop, and they
+vary by about 25% with whatever else that laptop is doing. Treat them as an
+order of magnitude, not a specification.
 
 The query count and the rows-downloaded figures are **exact and
 hardware-independent** — they are properties of the algorithm, and the test
