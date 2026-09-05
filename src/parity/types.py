@@ -42,6 +42,39 @@ class Column:
 
 
 @dataclass(frozen=True)
+class KeySpec:
+    """How rows are matched up between the two sides.
+
+    A single integer column is used directly: it buckets cleanly and the SQL is
+    exactly what it always was. Anything else - a uuid, a natural string key, or
+    several columns together - is *hashed* into a 60-bit integer purely so the
+    bisection has something to divide.
+
+    The hash is only ever used to choose buckets. Row identity stays the
+    original key text, because a 60-bit hash has a real collision probability
+    over a large table, and two unrelated rows sharing a bucket must not be
+    mistaken for the same row. Bucketing may collide harmlessly; identity may
+    not collide at all.
+    """
+
+    columns: tuple[Column, ...]
+    #: True when the key has to be hashed to produce a bucketing integer.
+    hashed: bool
+
+    @property
+    def names(self) -> list[str]:
+        """The key column names, in the order the user gave them."""
+        return [c.name for c in self.columns]
+
+    @property
+    def label(self) -> str:
+        """How to name this key in an error message."""
+        if len(self.columns) == 1:
+            return repr(self.columns[0].name)
+        return " + ".join(repr(n) for n in self.names)
+
+
+@dataclass(frozen=True)
 class KeyStats:
     """What one side reports about its key column, from a single scan.
 
@@ -88,7 +121,10 @@ class KeyStats:
 
 @dataclass
 class RowDiff:
-    key: int
+    #: The row's key as the user would recognise it: an int for an integer
+    #: key, otherwise the canonical text of the key column(s). Never a hash -
+    #: a reader has to be able to go and look the row up.
+    key: int | str
     kind: str  # "only_in_a" | "only_in_b" | "different"
     columns: list[str] = field(default_factory=list)
     values_a: dict[str, str] = field(default_factory=dict)

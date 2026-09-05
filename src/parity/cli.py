@@ -66,7 +66,13 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--a-table", required=True, metavar="TABLE", help="side A table")
     d.add_argument("--b", required=True, metavar="CONN", help="side B connection string")
     d.add_argument("--b-table", required=True, metavar="TABLE", help="side B table")
-    d.add_argument("--key", required=True, metavar="COL", help="integer key column")
+    d.add_argument(
+        "--key", required=True, metavar="COL[,COL...]",
+        help="the column(s) that identify a row. One integer column is used "
+             "directly; a uuid, a text key or several columns together are "
+             "hashed so the key space can be bisected, and rows are still "
+             "reported by their real key.",
+    )
     d.add_argument(
         "--columns", metavar="a,b,c",
         help="compare only these columns (default: every column both sides share)",
@@ -147,6 +153,19 @@ def _symbols(out: TextIO) -> dict[str, str]:
     except (LookupError, UnicodeEncodeError):
         return {"bad": "x", "ok": "=", "dot": "-", "partial": "?"}
     return {"bad": "✗", "ok": "✓", "dot": "·", "partial": "!"}
+
+
+def _display_key(key: int | str) -> str:
+    """Render a row key for a human.
+
+    A composite key's canonical text is joined by ASCII Unit Separator, which
+    is exactly right for hashing and unreadable on a terminal. Show the parts
+    separated visibly instead. JSON keeps the raw text, so a machine still sees
+    what was actually compared.
+    """
+    if isinstance(key, str) and "" in key:
+        return " | ".join(_display(part) for part in key.split(""))
+    return _display(key) if isinstance(key, str) else str(key)
 
 
 def _display(value: str) -> str:
@@ -245,10 +264,11 @@ def _render_diff(d: RowDiff, out: TextIO) -> None:
     """
     label = KIND_LABELS[d.kind]
     if d.kind != "different":
-        print(f"  {label:<11} key {d.key}", file=out)
+        print(f"  {label:<11} key {_display_key(d.key)}", file=out)
         return
 
-    print(f"  {label:<11} key {d.key:<14} columns: {', '.join(d.columns)}", file=out)
+    shown_key = _display_key(d.key)
+    print(f"  {label:<11} key {shown_key:<14} columns: {', '.join(d.columns)}", file=out)
     name_w = max((len(c) for c in d.columns), default=0)
     a_vals = {c: _display(d.values_a.get(c, "")) for c in d.columns}
     b_vals = {c: _display(d.values_b.get(c, "")) for c in d.columns}
@@ -338,7 +358,9 @@ def _run_diff(args: argparse.Namespace, out: TextIO) -> int:
             a, b,
             a_table=args.a_table,
             b_table=args.b_table,
-            key=args.key,
+            # Comma-separated for composite keys; a single name is just a
+            # one-element list.
+            key=_split(args.key) or args.key,
             columns=_split(args.columns) or None,
             exclude=_split(args.exclude),
             bisection_factor=args.bisection_factor,

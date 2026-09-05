@@ -26,7 +26,7 @@ from parity.dialects.base import (
     map_type,
     require_matching_scales,
 )
-from parity.types import Column, LogicalType
+from parity.types import Column, KeySpec, LogicalType
 
 # --------------------------------------------------------------------------
 # Fixture schema. Only the physical type names differ between engines; every
@@ -506,13 +506,13 @@ def test_duplicate_keys_are_rejected_not_silently_collapsed(tmp_path):
 
     d = open_duckdb(path)
     try:
-        stats = d.key_stats("main.t", "id")
+        stats = d.key_stats("main.t", d.key_spec("main.t", "id"))
         assert stats.rows == 3 and stats.distinct == 2
         assert stats.has_duplicate_keys
 
         cols = [c for c in d.columns("main.t") if c.name != "id"]
         with pytest.raises(ValueError) as exc:
-            d.fetch_range("main.t", "id", cols, 0, 10)
+            d.fetch_range("main.t", d.key_spec("main.t", "id"), cols, 0, 10)
         assert "duplicate key 1" in str(exc.value)
         assert "side B" in str(exc.value)
     finally:
@@ -529,7 +529,7 @@ def test_key_stats_on_an_empty_table(tmp_path):
 
     d = open_duckdb(path)
     try:
-        stats = d.key_stats("main.t", "id")
+        stats = d.key_stats("main.t", d.key_spec("main.t", "id"))
         assert stats.empty and not stats.has_duplicate_keys
         assert stats.lo is None and stats.hi is None
     finally:
@@ -537,22 +537,38 @@ def test_key_stats_on_an_empty_table(tmp_path):
 
 
 @pytest.mark.duckdb
-def test_non_integer_key_is_reported_clearly(tmp_path):
-    """A text key says so plainly instead of leaking a cast error."""
-    path = str(tmp_path / "strkey.duckdb")
-    con = duckdb_write(path)
-    con.execute("create table t (id varchar, v integer)")
-    con.execute("insert into t values ('a', 1)")
-    con.close()
+def test_a_text_key_is_hashed_but_reported_by_its_real_value(tmp_path):
+    """The safety property behind hashed keys.
 
-    d = open_duckdb(path)
+    A 60-bit hash has a real collision probability over a large table, so the
+    hash is used only to choose buckets. Row identity stays the original key,
+    which is why two colliding rows cannot be mistaken for one - and why the
+    report shows a key the reader can actually go and look up.
+    """
+    from parity.engine import diff
+
+    def make(path: str, value: str) -> str:
+        """Build a table keyed by a uuid-shaped string."""
+        con = duckdb_write(path)
+        con.execute("create table t (uid varchar, v varchar)")
+        con.execute(f"insert into t values ('aaa-111', 'same'), ('bbb-222', '{value}')")
+        con.close()
+        return path
+
+    a = open_duckdb(make(str(tmp_path / "uk_a.duckdb"), "before"), side="A")
+    b = open_duckdb(make(str(tmp_path / "uk_b.duckdb"), "after"), side="B")
     try:
-        with pytest.raises(ValueError) as exc:
-            d.key_stats("main.t", "id")
-        msg = str(exc.value)
-        assert "not an integer" in msg and "side B" in msg
+        spec = a.key_spec("main.t", "uid")
+        assert spec.hashed, "a varchar key has to be hashed to be bisected"
+
+        result = diff(a, b, "main.t", "main.t", "uid")
+        assert [d.kind for d in result.diffs] == ["different"]
+        # The reported key is the uid, not the 60-bit bucket number.
+        assert result.diffs[0].key == "bbb-222", result.diffs[0].key
+        assert result.diffs[0].columns == ["v"]
     finally:
-        d.close()
+        a.close()
+        b.close()
 
 
 @pytest.mark.duckdb
@@ -715,7 +731,7 @@ def test_the_bucket_expression_always_widens_before_multiplying():
         (PostgresDialect(), "numeric"),
     ):
         for hi in (10**9, 2**62):
-            bucket = dialect._segment_sql("t", "id", cols, 0, hi, 32).split(" as seg")[0]
+            bucket = dialect._segment_sql("t", _int_key(), cols, 0, hi, 32).split(" as seg")[0]
             assert widener in bucket, (
                 f"{dialect.name} did not widen the key offset for hi={hi}: {bucket}"
             )
@@ -786,7 +802,7 @@ def test_a_null_key_is_reported_as_null_not_as_a_duplicate(tmp_path):
 
     a, b = open_duckdb(a_path, side="A"), open_duckdb(b_path, side="B")
     try:
-        stats = a.key_stats("main.t", "id")
+        stats = a.key_stats("main.t", a.key_spec("main.t", "id"))
         assert stats.rows == 3 and stats.non_null == 2 and stats.distinct == 2
         assert stats.has_null_keys and stats.null_keys == 1
         assert not stats.has_duplicate_keys, (
@@ -815,7 +831,7 @@ def test_duplicates_are_still_caught_when_no_key_is_null(tmp_path):
 
     d = open_duckdb(path)
     try:
-        stats = d.key_stats("main.t", "id")
+        stats = d.key_stats("main.t", d.key_spec("main.t", "id"))
         assert not stats.has_null_keys
         assert stats.has_duplicate_keys
     finally:
@@ -1075,7 +1091,7 @@ def test_an_in_memory_dialect_works_and_is_not_read_only():
     try:
         d.query("create table t (id bigint)")
         d.query("insert into t values (1), (2)")
-        assert d.key_stats("main.t", "id").rows == 2
+        assert d.key_stats("main.t", d.key_spec("main.t", "id")).rows == 2
         assert d.query("select current_setting('TimeZone')")[0][0] == "UTC"
     finally:
         d.close()
@@ -1084,6 +1100,11 @@ def test_an_in_memory_dialect_works_and_is_not_read_only():
 # --------------------------------------------------------------------------
 # 9. Wide tables - PostgreSQL caps a function call at 100 arguments
 # --------------------------------------------------------------------------
+
+
+def _int_key() -> KeySpec:
+    """A plain integer key spec, for tests that build SQL without a table."""
+    return KeySpec((Column("id", LogicalType.INTEGER, "bigint"),), hashed=False)
 
 
 def _wide_columns(n: int) -> list[Column]:

@@ -165,11 +165,29 @@ def test_an_unknown_key_column_lists_the_real_ones(base):
     assert "order_id" in err and "customer_id" in err
 
 
-def test_a_non_integer_key_is_refused(base):
-    """A text key is rejected before the walk, not as a cast error inside it."""
+def test_a_text_key_is_hashed_and_works(base, tmp_path):
+    """A non-integer key is bisected via a hash rather than being refused.
+
+    `status` is a varchar and not unique, so this also confirms the uniqueness
+    check runs on the real key rather than on its hash.
+    """
     code, out, err = run_cli(*diff_args(base, base, "--key", "status"))
     assert code == EXIT_ERROR
-    assert "integer" in err and "status" in err
+    assert "not unique" in err, err
+
+
+def test_a_composite_key_is_accepted(base, tmp_path):
+    """Several columns together identify a row, comma-separated."""
+    other = build(str(tmp_path / "composite.duckdb"), plant="changed")
+    code, out, _ = run_cli(*diff_args(base, other, "--key", "id,customer_id", "--json"))
+    payload = json.loads(out)
+
+    assert code == EXIT_DIFFERENCES
+    assert payload["difference_count"] == 1
+    # Both key columns are matched on, so neither is compared.
+    assert "id" not in payload["columns_compared"]
+    assert "customer_id" not in payload["columns_compared"]
+    assert any("hash" in w.lower() for w in payload["warnings"])
 
 
 def test_a_duplicate_key_is_refused_rather_than_answered_wrongly(base, tmp_path):

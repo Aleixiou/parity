@@ -98,7 +98,7 @@ imported lazily, so a DuckDB-only user is never made to install `psycopg`.
 ## Usage
 
 ```
-parity diff --a CONN --a-table TABLE --b CONN --b-table TABLE --key COL
+parity diff --a CONN --a-table TABLE --b CONN --b-table TABLE --key COL[,COL...]
             [--columns a,b,c] [--exclude x,y]
             [--bisection-factor 32] [--threshold 10000] [--float-scale 6]
             [--max-diffs 100] [--json] [--quiet]
@@ -203,9 +203,12 @@ always names which side.
 A parity tool that reports a false match is worse than useless, so these are
 stated plainly rather than buried.
 
-- **Integer keys only.** The bisection arithmetic divides the key range. A
-  `varchar` or `uuid` key is rejected with a clear message, not guessed at.
-  Composite and hashed keys are a planned extension.
+- **Any key type, but non-integer keys are bucketed by a hash.** A single
+  integer column is bisected directly. A `uuid`, a natural string key, or
+  several columns together are hashed to 60 bits so the key space can be
+  divided — and the run says so. Rows are still matched and reported by their
+  real key, so a hash collision can only put two rows in the same bucket; it
+  can never merge them.
 - **Floats and decimals are compared at 6 decimal places** by default. Two
   values differing only in the 7th place are reported as *equal*. This is a
   deliberate cross-engine rounding contract — the two engines do not otherwise

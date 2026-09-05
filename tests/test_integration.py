@@ -215,8 +215,8 @@ def test_the_checksum_does_not_overflow_on_a_full_table(pg, pg_tables, duck):
     in a wider type.
     """
     cols = [c for c in duck.columns("main.orders") if c.name != "id"]
-    a_sums = pg.segment_checksums(pg_tables["clean"], "id", cols, 1, N + 1, 1)
-    b_sums = duck.segment_checksums("main.orders", "id", cols, 1, N + 1, 1)
+    a_sums = pg.segment_checksums(pg_tables["clean"], pg.key_spec(pg_tables["clean"], "id"), cols, 1, N + 1, 1)
+    b_sums = duck.segment_checksums("main.orders", duck.key_spec("main.orders", "id"), cols, 1, N + 1, 1)
 
     assert a_sums == b_sums
     total = a_sums[0][1]
@@ -227,8 +227,8 @@ def test_the_checksum_does_not_overflow_on_a_full_table(pg, pg_tables, duck):
 def test_row_counts_and_checksums_agree_bucket_for_bucket(pg, pg_tables, duck):
     """Not just the total - every bucket, so a compensating error cannot hide."""
     cols = [c for c in duck.columns("main.orders") if c.name != "id"]
-    a_sums = pg.segment_checksums(pg_tables["clean"], "id", cols, 1, N + 1, 64)
-    b_sums = duck.segment_checksums("main.orders", "id", cols, 1, N + 1, 64)
+    a_sums = pg.segment_checksums(pg_tables["clean"], pg.key_spec(pg_tables["clean"], "id"), cols, 1, N + 1, 64)
+    b_sums = duck.segment_checksums("main.orders", duck.key_spec("main.orders", "id"), cols, 1, N + 1, 64)
 
     assert set(a_sums) == set(b_sums) == set(range(64))
     assert a_sums == b_sums
@@ -356,7 +356,7 @@ def test_the_walk_sees_one_consistent_snapshot(pg_url, duck):
         reader = open_pg(pg_url, side="A")
         try:
             cols = [c for c in reader.columns(table) if c.name != "id"]
-            before = reader.key_stats(table, "id")
+            before = reader.key_stats(table, reader.key_spec(table, "id"))
 
             # Someone writes to the table mid-walk.
             writer.execute(
@@ -365,8 +365,8 @@ def test_the_walk_sees_one_consistent_snapshot(pg_url, duck):
             )
             writer.execute(f"update {table} set status = 'CHANGED' where id = 500")
 
-            after = reader.key_stats(table, "id")
-            sums = reader.segment_checksums(table, "id", cols, 1, 1_000_001, 1)
+            after = reader.key_stats(table, reader.key_spec(table, "id"))
+            sums = reader.segment_checksums(table, reader.key_spec(table, "id"), cols, 1, 1_000_001, 1)
 
             assert after.rows == before.rows == 1000, (
                 "the walk saw the row count change underneath it"

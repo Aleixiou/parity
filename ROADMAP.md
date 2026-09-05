@@ -11,11 +11,12 @@ document, because it makes a reader distrust the accurate ones.
 
 ## Where it is
 
-**v0.1.0, released.** `pip install parity-diff`, MIT, PostgreSQL ↔ DuckDB.
+**v0.1.0 released**, with non-integer and composite key support added since.
+`pip install parity-diff`, MIT, PostgreSQL ↔ DuckDB.
 
 | | |
 |---|---|
-| Tests | 290, zero skipped against live PostgreSQL and DuckDB |
+| Tests | 293, zero skipped against live PostgreSQL and DuckDB |
 | Coverage | 99%, with a 95% floor enforced in CI |
 | CI | ruff, `mypy --strict`, PostgreSQL 16 and 18, Python 3.10 and 3.13, Windows, a DuckDB-only install |
 | Proven | 10M rows per side: identical in 4 queries and 0 rows downloaded; five planted differences found exactly, moving 0.0381% of the data |
@@ -40,17 +41,10 @@ six traps that will bite. It is not done until `tests/test_encoding.py` passes
 against the real engine — an unverified dialect on a tool whose whole claim is
 that it does not lie is worse than no dialect.
 
-### 2. Non-integer and composite keys
+### 2. More engine coverage beyond the first one
 
-The bisection arithmetic divides the key range, so it needs an integer. A
-`uuid` or a composite natural key is refused with a clear message rather than
-guessed at — but plenty of modern tables are keyed exactly that way, and they
-simply cannot be compared today.
-
-The intended route is to hash the key into an integer and keep the same
-bisection. That produces keys spread across the full bigint range, which is why
-the overflow work in `CLAUDE.md` §4.5 had to be finished before this is
-attempted.
+`data-diff` shipped extras for twelve engines. Every one of them is a table
+someone cannot currently compare.
 
 ### 3. Sampling mode
 
@@ -85,7 +79,7 @@ contributor knows which are deliberate and which are open.
 
 | Limitation | Status |
 |---|---|
-| Integer keys only | Open — see above |
+| Non-integer keys are bucketed by a 60-bit hash | Deliberate — identity stays the real key, so a collision cannot merge rows |
 | Floats compared at 6 decimal places | Deliberate, configurable, printed on every run |
 | Keys must be unique and non-NULL | Deliberate — both are detected and refused |
 | At most 10,000 differences reported | Deliberate — unbounded needed 8.5 GB at 10M rows |

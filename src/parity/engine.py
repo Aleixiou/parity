@@ -20,7 +20,14 @@ from contextlib import contextmanager
 from typing import Any, TypeVar
 
 from parity.dialects.base import Dialect, require_matching_scales
-from parity.types import Column, DiffResult, DiffStats, LogicalType, RowDiff
+from parity.types import (
+    Column,
+    DiffResult,
+    DiffStats,
+    KeySpec,
+    LogicalType,
+    RowDiff,
+)
 
 #: What a bucket looks like when a side returned no group for it at all.
 #: `group by` only emits non-empty groups, so an absent bucket genuinely holds
@@ -116,16 +123,89 @@ def _is_tz_aware(column: Column) -> bool:
     return "with time zone" in column.raw_type.lower()
 
 
+def _key_order(key: int | str) -> tuple[int, int | str]:
+    """Sort ints numerically and text lexically, never comparing the two.
+
+    A plain `str()` sort would put 4321 before 5, which is a nasty thing to do
+    to a report someone is scanning for a row.
+    """
+    return (1, key) if isinstance(key, str) else (0, key)
+
+
+def _resolve_key(
+    key: str | Sequence[str],
+    cols_a: dict[str, Column],
+    cols_b: dict[str, Column],
+    a_table: str,
+    b_table: str,
+    warnings: list[str],
+) -> tuple[KeySpec, KeySpec]:
+    """Work out how to match rows up, and whether the key needs hashing.
+
+    A single integer column on both sides is used as-is: the SQL is exactly
+    what it has always been and costs nothing extra. Anything else - a uuid, a
+    natural string key, several columns together - gets hashed to a 60-bit
+    integer so the bisection has something to divide.
+
+    Returns one spec per side. They agree on shape but hold each side's own
+    `Column` objects, because a column can be `text` on one side and
+    `varchar` on the other and each dialect renders its own.
+    """
+    names = [key] if isinstance(key, str) else list(dict.fromkeys(key))
+    if not names:
+        raise ValueError("--key needs at least one column")
+
+    for side, table, cols in (("A", a_table, cols_a), ("B", b_table, cols_b)):
+        missing = [n for n in names if n not in cols]
+        if missing:
+            raise ValueError(
+                f"[side {side}] key column(s) {missing} not in {table}. "
+                f"Columns are: {sorted(cols)}"
+            )
+
+    a_key = tuple(cols_a[n] for n in names)
+    b_key = tuple(cols_b[n] for n in names)
+
+    # Hash unless it is one integer column on both sides. A single-column key
+    # that is integer on one side and text on the other has to be hashed too,
+    # or the two sides would bucket by different things entirely.
+    single_integer = (
+        len(names) == 1
+        and a_key[0].logical_type is LogicalType.INTEGER
+        and b_key[0].logical_type is LogicalType.INTEGER
+    )
+    hashed = not single_integer
+
+    if hashed:
+        what = (
+            "composite key"
+            if len(names) > 1
+            else f"non-integer key ({a_key[0].raw_type or a_key[0].logical_type.value})"
+        )
+        warnings.append(
+            f"{what}: bucketed by a 60-bit hash of {names}. Rows are still "
+            f"matched and reported by their real key, so a hash collision "
+            f"cannot merge two rows - it only puts them in the same bucket."
+        )
+
+    return KeySpec(a_key, hashed), KeySpec(b_key, hashed)
+
+
 def _select_columns(
     cols_a: dict[str, Column],
     cols_b: dict[str, Column],
-    key: str,
+    key_names: Sequence[str],
     columns: Sequence[str] | None,
     exclude: Sequence[str],
     warnings: list[str],
 ) -> list[str]:
-    """Decide which columns to compare, explaining anything dropped."""
-    both = (set(cols_a) & set(cols_b)) - {key}
+    """Decide which columns to compare, explaining anything dropped.
+
+    Key columns are never compared: they are how rows are matched up, not
+    something compared between them.
+    """
+    keys = set(key_names)
+    both = (set(cols_a) & set(cols_b)) - keys
     excluded = set(exclude)
 
     unknown_exclude = excluded - set(cols_a) - set(cols_b)
@@ -141,12 +221,12 @@ def _select_columns(
         nowhere = [c for c in requested if c not in cols_a and c not in cols_b]
         one_side = [c for c in requested if c not in nowhere and c not in both]
         dropped = [c for c in requested if c in excluded]
-        # Order matters: the key is present on both sides but excluded from
-        # `both`, so it would otherwise be misreported as one-sided.
-        if key in requested:
+        # Order matters: key columns are present on both sides but excluded
+        # from `both`, so they would otherwise be misreported as one-sided.
+        if named_keys := [c for c in requested if c in keys]:
             raise ValueError(
-                f"--columns named the key column {key!r}; the key is how rows "
-                f"are matched up, not something compared between them"
+                f"--columns named the key column(s) {named_keys}; the key is "
+                f"how rows are matched up, not something compared between them"
             )
         if nowhere:
             raise ValueError(f"--columns named unknown columns: {nowhere}")
@@ -161,8 +241,8 @@ def _select_columns(
         shared = [c for c in shared if c in set(requested)]
 
     for side, only in (
-        ("A", sorted(set(cols_a) - set(cols_b) - {key})),
-        ("B", sorted(set(cols_b) - set(cols_a) - {key})),
+        ("A", sorted(set(cols_a) - set(cols_b) - keys)),
+        ("B", sorted(set(cols_b) - set(cols_a) - keys)),
     ):
         if only:
             warnings.append(f"not compared, present only on side {side}: {only}")
@@ -222,7 +302,7 @@ def diff(
     b: Dialect,
     a_table: str,
     b_table: str,
-    key: str,
+    key: str | Sequence[str],
     columns: Sequence[str] | None = None,
     exclude: Sequence[str] = (),
     bisection_factor: int = 32,
@@ -269,27 +349,17 @@ def diff(
         # users read as "how much work did this cost".
         stats.queries -= 2
 
-        for side, table, cols in (("A", a_table, cols_a), ("B", b_table, cols_b)):
-            if key not in cols:
-                raise ValueError(
-                    f"[side {side}] key column {key!r} is not in {table}. "
-                    f"Columns are: {sorted(cols)}"
-                )
-            col = cols[key]
-            if col.logical_type is not LogicalType.INTEGER:
-                # The bisection arithmetic divides the key range. A varchar or
-                # uuid key would otherwise fail as a cast error mid-walk.
-                raise ValueError(
-                    f"[side {side}] key column {key!r} in {table} is "
-                    f"{col.raw_type or col.logical_type.value}, not an integer. "
-                    f"Only integer keys are supported."
-                )
+        key_a, key_b = _resolve_key(
+            key, cols_a, cols_b, a_table, b_table, warnings
+        )
 
-        shared = _select_columns(cols_a, cols_b, key, columns, exclude, warnings)
+        shared = _select_columns(
+            cols_a, cols_b, key_a.names, columns, exclude, warnings
+        )
         a_cols = [cols_a[c] for c in shared]
         b_cols = [cols_b[c] for c in shared]
 
-        ks_a, ks_b = both("key_stats", key)
+        ks_a, ks_b = both("key_stats", key_a, _args_b=(key_b,))
 
         # A non-unique key is fatal, not a warning: `fetch_range` maps key to
         # row, so duplicates collapse and their differences disappear.
@@ -342,17 +412,17 @@ def diff(
 
                 if span <= 1:
                     _compare_rows(
-                        pool, a, b, a_table, b_table, key,
+                        pool, a, b, a_table, b_table, key_a, key_b,
                         a_cols, b_cols, s_lo, s_hi, diffs, stats,
                     )
                     continue
 
                 n = min(bisection_factor, span)
                 fa = pool.submit(
-                    a.segment_checksums, a_table, key, a_cols, s_lo, s_hi, n
+                    a.segment_checksums, a_table, key_a, a_cols, s_lo, s_hi, n
                 )
                 fb = pool.submit(
-                    b.segment_checksums, b_table, key, b_cols, s_lo, s_hi, n
+                    b.segment_checksums, b_table, key_b, b_cols, s_lo, s_hi, n
                 )
                 cs_a, cs_b = _gather(fa, fb)
                 stats.queries += 2
@@ -373,13 +443,13 @@ def diff(
                     b_lo_i, b_hi_i = bucket_bounds(i, s_lo, s_hi, n)
                     if max(va[0], vb[0]) <= threshold or b_hi_i - b_lo_i <= 1:
                         _compare_rows(
-                            pool, a, b, a_table, b_table, key,
+                            pool, a, b, a_table, b_table, key_a, key_b,
                             a_cols, b_cols, b_lo_i, b_hi_i, diffs, stats,
                         )
                     else:
                         queue.append((b_lo_i, b_hi_i))
 
-    diffs.sort(key=lambda d: d.key)
+    diffs.sort(key=lambda d: _key_order(d.key))
     if max_diffs is not None and len(diffs) > max_diffs:
         # A single bucket download can overshoot the limit by a lot. Report the
         # first `max_diffs` in key order and say the rest were not listed.
@@ -408,7 +478,8 @@ def _compare_rows(
     b: Dialect,
     a_table: str,
     b_table: str,
-    key: str,
+    key_a: KeySpec,
+    key_b: KeySpec,
     a_cols: list[Column],
     b_cols: list[Column],
     lo: int,
@@ -417,8 +488,8 @@ def _compare_rows(
     stats: DiffStats,
 ) -> None:
     """Download a proven-different range from both sides and diff it locally."""
-    fa = pool.submit(a.fetch_range, a_table, key, a_cols, lo, hi)
-    fb = pool.submit(b.fetch_range, b_table, key, b_cols, lo, hi)
+    fa = pool.submit(a.fetch_range, a_table, key_a, a_cols, lo, hi)
+    fb = pool.submit(b.fetch_range, b_table, key_b, b_cols, lo, hi)
     rows_a, rows_b = _gather(fa, fb)
     stats.queries += 2
     stats.rows_downloaded += len(rows_a) + len(rows_b)
@@ -430,7 +501,11 @@ def _compare_rows(
     # silently truncate and simply not report the trailing columns - a
     # difference the tool found and then dropped, which is the one outcome it
     # must never produce. Better to raise.
-    for k in sorted(set(rows_a) | set(rows_b)):
+    # Keys are ints or text depending on how the key resolved. Sorting by
+    # str() would put 4321 before 5, so order by type first and value
+    # second - within one result every key has the same type, so the
+    # values are never compared across types.
+    for k in sorted(set(rows_a) | set(rows_b), key=_key_order):
         ra, rb = rows_a.get(k), rows_b.get(k)
         if ra is None:
             diffs.append(

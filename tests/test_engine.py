@@ -329,18 +329,43 @@ def test_duplicate_keys_are_refused():
     assert "not unique" in str(exc.value) and "side A" in str(exc.value)
 
 
-def test_a_non_integer_key_is_refused_by_name_and_type():
-    """A uuid key fails immediately, naming the side and the type."""
+def test_a_non_integer_key_is_hashed_rather_than_refused():
+    """A uuid or natural string key used to be rejected outright.
+
+    It is now hashed to a 60-bit integer purely so the bisection has something
+    to divide - and the warning says so, because bucketing by a hash is a thing
+    a careful reader deserves to be told about.
+    """
+    cols = [Column("v", LogicalType.STRING, "varchar")]
     a = FakeDialect(
-        DictTable(COLS, {1: ("1", "a")}),
+        DictTable(cols, {1: ("same",), 2: ("a",)}),
         side="A",
         key_type_override=Column("id", LogicalType.STRING, "uuid"),
     )
-    b = FakeDialect(DictTable(COLS, {1: ("1", "a")}), side="B")
-    with pytest.raises(ValueError) as exc:
-        diff(a, b, "a.t", "b.t", "id")
-    msg = str(exc.value)
-    assert "side A" in msg and "uuid" in msg and "integer" in msg
+    b = FakeDialect(
+        DictTable(cols, {1: ("same",), 2: ("CHANGED",)}),
+        side="B",
+        key_type_override=Column("id", LogicalType.STRING, "uuid"),
+    )
+    result = diff(a, b, "a.t", "b.t", "id")
+
+    assert [d.kind for d in result.diffs] == ["different"]
+    assert any("hash" in w.lower() for w in result.warnings), result.warnings
+
+
+def test_a_composite_key_is_accepted():
+    """Several columns together are hashed as one key."""
+    cols = [
+        Column("region", LogicalType.STRING, "varchar"),
+        Column("v", LogicalType.STRING, "varchar"),
+    ]
+    a = FakeDialect(DictTable(cols, {1: ("eu", "same"), 2: ("us", "a")}), side="A")
+    b = FakeDialect(DictTable(cols, {1: ("eu", "same"), 2: ("us", "CHANGED")}), side="B")
+
+    result = diff(a, b, "a.t", "b.t", ["id", "region"])
+    assert [d.kind for d in result.diffs] == ["different"]
+    # `region` is part of the key, so it is matched on and never compared.
+    assert [c.name for c in result.columns] == ["v"]
 
 
 def test_a_missing_key_column_lists_what_is_there():
@@ -789,3 +814,73 @@ def test_a_normal_run_is_untouched_by_the_bound():
     result, _, _ = run(SyntheticTable(50_000), SyntheticTable(50_000, deleted=[7]))
     assert not result.truncated
     assert [(d.key, d.kind) for d in result.diffs] == [(7, "only_in_a")]
+
+
+def test_a_bucket_collision_cannot_merge_two_rows():
+    """The safety property behind hashed keys, forced rather than hoped for.
+
+    A 60-bit hash has a real collision probability over a large table. If row
+    identity were the hash, two colliding rows would be compared against each
+    other - masking one difference and inventing another. Identity is the
+    original key, so a collision only means a shared bucket.
+
+    Modelled by a dialect where *every* key hashes to the same value: buckets
+    and fetches both behave as if there is one bucket, which is the worst case
+    a real collision could ever produce.
+    """
+    class TotalCollision(FakeDialect):
+        """A dialect in which every key hashes to bucket zero."""
+
+        def segment_checksums(self, table, key, columns, lo, hi, n_segments):
+            """Every row lands in bucket 0, whatever its key."""
+            self.queries += 1
+            count = checksum = 0
+            for k in self.table.all_keys():
+                count += 1
+                checksum += row_hash(self.table.text(k, columns))
+            return {0: (count, checksum)} if count else {}
+
+        def fetch_range(self, table, key, columns, lo, hi):
+            """Any range covering bucket 0 therefore returns every row.
+
+            Still keyed by real identity - which is the whole point.
+            """
+            self.queries += 1
+            index = {c.name: i for i, c in enumerate(self.table.columns)}
+            out = {}
+            for k in sorted(self.table.all_keys()):
+                values = self.table.row(k)
+                out[k] = tuple(values[index[c.name]] for c in columns)
+            self.rows_served += len(out)
+            return out
+
+    cols = [Column("v", LogicalType.STRING, "varchar")]
+    a = TotalCollision(DictTable(cols, {1: ("a",), 2: ("b",), 3: ("c",)}), side="A")
+    b = TotalCollision(DictTable(cols, {1: ("a",), 2: ("CHANGED",), 3: ("c",)}), side="B")
+
+    result = diff(a, b, "a.t", "b.t", "id", threshold=10)
+
+    assert [(d.key, d.kind) for d in result.diffs] == [(2, "different")], (
+        "rows sharing a bucket must still be compared under their own keys"
+    )
+    assert result.diffs[0].values_a == {"v": "b"}
+    assert result.diffs[0].values_b == {"v": "CHANGED"}
+
+
+def test_identity_and_bucket_are_different_expressions_when_hashed():
+    """What makes the collision safe: the two are computed separately.
+
+    For an integer key they are the same column, and the SQL is unchanged from
+    before hashing existed.
+    """
+    from parity.dialects.duckdb_dialect import DuckDBDialect
+    from parity.types import KeySpec
+
+    d = DuckDBDialect()
+    integer = KeySpec((Column("id", LogicalType.INTEGER, "bigint"),), hashed=False)
+    assert d.key_bucket(integer) == d.key_identity(integer) == '"id"'
+
+    text = KeySpec((Column("uid", LogicalType.STRING, "uuid"),), hashed=True)
+    assert d.key_bucket(text) != d.key_identity(text)
+    assert "md5" in d.key_bucket(text)
+    assert "md5" not in d.key_identity(text)

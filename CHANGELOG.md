@@ -61,7 +61,9 @@ tool, and that discipline caught each of these before release:
 Stated plainly, because a parity tool that reports a false match is worse than
 useless.
 
-- **Integer keys only.** Other key types are rejected, not guessed at.
+- **Any key type.** A single integer column is bisected directly; a uuid, a
+  text key, or several columns together are hashed to 60 bits for bucketing
+  only. Identity stays the real key, so a collision cannot merge two rows.
 - **Floats and decimals compare at 6 decimal places** by default. Two values
   differing only in the 7th place are reported as equal. `--float-scale`
   changes it, and the scale in force is printed on every run.

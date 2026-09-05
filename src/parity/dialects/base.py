@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from typing import Any
 
-from parity.types import Column, KeyStats, LogicalType
+from parity.types import Column, KeySpec, KeyStats, LogicalType
 
 # Field separator inside a row's canonical text. Unit Separator (0x1f) is
 # chosen because it effectively never appears in warehouse string data;
@@ -294,26 +294,78 @@ class Dialect(ABC):
         """
         return self.hash_expr(self.row_text(columns))
 
+    def key_spec(self, table: str, *names: str) -> KeySpec:
+        """Build a `KeySpec` for these columns of this table.
+
+        Introspects the table, then decides on hashing the same way the engine
+        does: a single integer column is used directly, anything else - a uuid,
+        a natural string key, several columns together - is hashed.
+
+        The engine builds its own specs so it can compare the two sides' types
+        before deciding. This is for calling a dialect on its own.
+        """
+        if not names:
+            raise self._err("a key needs at least one column")
+        found = {c.name: c for c in self.columns(table)}
+        missing = [n for n in names if n not in found]
+        if missing:
+            raise self._err(
+                f"key column(s) {missing} not in {table}. "
+                f"Columns are: {sorted(found)}"
+            )
+        cols = tuple(found[n] for n in names)
+        hashed = not (
+            len(cols) == 1 and cols[0].logical_type is LogicalType.INTEGER
+        )
+        return KeySpec(cols, hashed)
+
+    def key_bucket(self, key: KeySpec) -> str:
+        """The integer the bisection divides.
+
+        A single integer column is itself; anything else is hashed down to 60
+        bits. Collisions here are harmless - two rows sharing a bucket are
+        still compared individually by `key_identity`.
+        """
+        if not key.hashed:
+            return self.quote(key.columns[0].name)
+        return self.hash_expr(self.row_text(key.columns))
+
+    def key_identity(self, key: KeySpec) -> str:
+        """The key as the user would recognise it, and as rows are matched by.
+
+        Never the hash. Identity has to be exact, or two unrelated rows that
+        happened to collide would be compared against each other - a false
+        difference at best and a masked one at worst.
+        """
+        if not key.hashed:
+            return self.quote(key.columns[0].name)
+        return self.row_text(key.columns)
+
     # ------------------------------------------------------------- queries
 
-    def key_stats(self, table: str, key: str) -> KeyStats:
+    def key_stats(self, table: str, key: KeySpec) -> KeyStats:
         """Key range plus row and distinct-key counts, in one scan.
 
-        ``count(distinct key)`` rides along with min/max deliberately. The
-        query already has to visit the key column, and without the distinct
-        count a non-unique key goes undetected: `fetch_range` returns a dict
-        keyed by the key column, so duplicate rows collapse and their
-        differences disappear. Paying for it here costs one aggregation, not
-        an extra round trip.
+        The range is over the *bucketing* value, which is the column itself for
+        an integer key and its hash otherwise. The counts are over the
+        *identity*, because that is what decides whether two rows are the same
+        row - counting distinct hashes would let a collision hide a duplicate.
+
+        Uniqueness rides along with min/max deliberately: the query already has
+        to visit the key, and without it a non-unique key goes undetected,
+        collapsing rows in `fetch_range` so their differences disappear.
         """
-        k = self.quote(key)
-        # `count({k})` counts non-NULL keys only, while `count(*)` counts every
-        # row. Carrying both is what lets a NULL key be diagnosed as a NULL key
-        # rather than misreported as a duplicate - `count(distinct)` also
-        # ignores NULLs, so without this a single NULL key looks exactly like a
-        # duplicated one.
+        bucket = self.key_bucket(key)
+        identity = self.key_identity(key)
+        # `count(identity)` counts non-NULL keys only, while `count(*)` counts
+        # every row. Carrying both is what lets a NULL key be diagnosed as a
+        # NULL key rather than misreported as a duplicate - `count(distinct)`
+        # also ignores NULLs. For a hashed key the identity is coalesced text
+        # and so never NULL, which means a NULL component shows up as a
+        # duplicate instead; that is the honest limit of doing this in one pass.
         sql = (
-            f"select min({k}), max({k}), count(*), count({k}), count(distinct {k}) "
+            f"select min({bucket}), max({bucket}), count(*), "
+            f"count({identity}), count(distinct {identity}) "
             f"from {self.qualify(table)}"
         )
         lo, hi, rows, non_null, distinct = self.query(sql)[0]
@@ -323,18 +375,20 @@ class Dialect(ABC):
             return KeyStats(
                 int(lo), int(hi), int(rows), int(distinct), int(non_null)
             )
-        except (TypeError, ValueError) as exc:
-            # A varchar or uuid key lands here. The bisection arithmetic is
-            # integer-only, so say that plainly instead of leaking a cast error.
+        except (TypeError, ValueError) as exc:  # pragma: no cover - see below
+            # Only reachable if a dialect's `key_bucket` returned something
+            # non-integer; the engine hashes any non-integer key before we get
+            # here, so this is a guard against a broken dialect rather than
+            # against user data.
             raise self._err(
-                f"key column {key!r} in {table} is not an integer "
-                f"(min value {lo!r}); only integer keys are supported"
+                f"key {key.label} in {table} did not produce an integer to "
+                f"bisect on (min value {lo!r})"
             ) from exc
 
     def segment_checksums(
         self,
         table: str,
-        key: str,
+        key: KeySpec,
         columns: Sequence[Column],
         lo: int,
         hi: int,
@@ -356,14 +410,14 @@ class Dialect(ABC):
     def _segment_sql(
         self,
         table: str,
-        key: str,
+        key: KeySpec,
         columns: Sequence[Column],
         lo: int,
         hi: int,
         n_segments: int,
     ) -> str:
         """The checksum query. Split out so its shape can be tested directly."""
-        k = self.quote(key)
+        k = self.key_bucket(key)
         # Every part of the bucket expression has to survive a key range as wide
         # as bigint itself, which is what a hashed key produces.
         #
@@ -396,37 +450,43 @@ class Dialect(ABC):
     def fetch_range(
         self,
         table: str,
-        key: str,
+        key: KeySpec,
         columns: Sequence[Column],
         lo: int,
         hi: int,
-    ) -> dict[int, tuple[str, ...]]:
+    ) -> dict[int | str, tuple[str, ...]]:
         """Download canonical text for every row in ``[lo, hi)``.
 
         Only ever called on ranges the checksums already proved to differ,
         and only once they are small enough to be cheap.
         """
-        k = self.quote(key)
+        bucket = self.key_bucket(key)
+        identity = self.key_identity(key)
         # With no comparable columns the row tuple is empty and only key
         # presence distinguishes the sides - see `row_text`.
         exprs = "".join(", " + self.normalize(c) for c in columns)
+        # Selected by identity, filtered and ordered by bucket. Those differ
+        # for a hashed key, and the distinction is the whole safety property:
+        # two rows may share a bucket, but they are still returned and compared
+        # under their own keys.
+        #
         # Inclusive upper bound, for the same reason as the checksum query:
         # `hi` is `max_key + 1`, which for a table holding the largest bigint is
         # one past what the column type can represent.
         sql = (
-            f"select {k}{exprs} from {self.qualify(table)} "
-            f"where {k} >= {lo} and {k} <= {hi - 1} order by {k}"
+            f"select {identity}{exprs} from {self.qualify(table)} "
+            f"where {bucket} >= {lo} and {bucket} <= {hi - 1} order by {bucket}"
         )
-        out: dict[int, tuple[str, ...]] = {}
+        out: dict[int | str, tuple[str, ...]] = {}
         for row in self.query(sql):
-            rk = int(row[0])
+            rk: int | str = row[0] if key.hashed else int(row[0])
             if rk in out:
                 # Second line of defence behind the up-front uniqueness check
                 # in `key_stats`: a key that duplicates only inside a fetched
                 # range would otherwise overwrite the earlier row and silently
                 # drop a real difference.
                 raise self._err(
-                    f"duplicate key {rk} in {table}: key column {key!r} is not "
+                    f"duplicate key {rk!r} in {table}: key {key.label} is not "
                     f"unique, so rows cannot be compared one-to-one"
                 )
             out[rk] = tuple(row[1:])
