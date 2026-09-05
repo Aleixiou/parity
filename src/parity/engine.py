@@ -197,6 +197,15 @@ def diff(
         # Reporting "identical" for a table we could not actually compare is
         # the one outcome this tool must never produce.
         for side, table, ks in (("A", a_table, ks_a), ("B", b_table, ks_b)):
+            # NULL keys first: `count(distinct)` ignores NULLs, so checking
+            # uniqueness alone would report a NULL key as a duplicate and send
+            # the reader hunting for duplicates that do not exist.
+            if ks.has_null_keys:
+                raise ValueError(
+                    f"[side {side}] key column {key!r} in {table} contains "
+                    f"{ks.null_keys:,} NULL value(s). A row with no key cannot "
+                    f"be matched to anything on the other side."
+                )
             if ks.has_duplicate_keys:
                 raise ValueError(
                     f"[side {side}] key column {key!r} in {table} is not "

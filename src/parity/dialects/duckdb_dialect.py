@@ -41,8 +41,7 @@ class DuckDBDialect(Dialect):
         return '"' + identifier.replace('"', '""') + '"'
 
     def columns(self, table: str) -> list[Column]:
-        parts = table.split(".")
-        schema, name = (parts[0], parts[1]) if len(parts) == 2 else ("main", parts[0])
+        schema, name = self.split_table(table, "main")
         rows = self.query(
             "select column_name, data_type from information_schema.columns "
             f"where table_schema = {_lit(schema)} and table_name = {_lit(name)} "

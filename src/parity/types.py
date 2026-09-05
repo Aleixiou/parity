@@ -60,14 +60,30 @@ class KeyStats:
     hi: int | None
     rows: int
     distinct: int
+    #: Rows whose key is not NULL. ``None`` means the dialect did not measure
+    #: it, in which case no NULL keys are assumed.
+    non_null: int | None = None
 
     @property
     def empty(self) -> bool:
         return self.rows == 0
 
     @property
+    def null_keys(self) -> int:
+        return 0 if self.non_null is None else self.rows - self.non_null
+
+    @property
+    def has_null_keys(self) -> bool:
+        return self.null_keys > 0
+
+    @property
     def has_duplicate_keys(self) -> bool:
-        return self.rows != self.distinct
+        # Compare like with like: `count(distinct k)` ignores NULLs, so
+        # measuring it against `count(*)` would report every NULL key as a
+        # duplicate and send the reader hunting for duplicates that do not
+        # exist. NULL keys are diagnosed separately.
+        comparable = self.rows if self.non_null is None else self.non_null
+        return comparable != self.distinct
 
 
 @dataclass

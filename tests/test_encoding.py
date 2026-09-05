@@ -728,3 +728,86 @@ def test_a_key_span_spanning_the_whole_bigint_range_still_works(tmp_path):
     finally:
         a.close()
         b.close()
+
+
+# --------------------------------------------------------------------------
+# 6. Unusable key columns must be diagnosed correctly, not merely refused
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.duckdb
+def test_a_null_key_is_reported_as_null_not_as_a_duplicate(tmp_path):
+    """`count(distinct k)` ignores NULLs, so a NULL key looks exactly like a
+    duplicated one unless non-NULL rows are counted separately. Refusing with
+    the wrong reason sends the reader hunting for duplicates that do not exist.
+    """
+    from parity.engine import diff
+
+    def make(path: str, rows: str) -> str:
+        con = duckdb_write(path)
+        con.execute("create table t (id bigint, v varchar)")
+        con.execute(f"insert into t values {rows}")
+        con.close()
+        return path
+
+    a_path = make(str(tmp_path / "nullkey_a.duckdb"), "(1,'a'),(2,'b'),(null,'c')")
+    b_path = make(str(tmp_path / "nullkey_b.duckdb"), "(1,'a'),(2,'b')")
+
+    a, b = open_duckdb(a_path, side="A"), open_duckdb(b_path, side="B")
+    try:
+        stats = a.key_stats("main.t", "id")
+        assert stats.rows == 3 and stats.non_null == 2 and stats.distinct == 2
+        assert stats.has_null_keys and stats.null_keys == 1
+        assert not stats.has_duplicate_keys, (
+            "two distinct non-NULL keys is not a duplicate"
+        )
+
+        with pytest.raises(ValueError) as exc:
+            diff(a, b, "main.t", "main.t", "id")
+        msg = str(exc.value)
+        assert "NULL" in msg and "side A" in msg
+        assert "not unique" not in msg, f"misdiagnosed as duplicates: {msg}"
+    finally:
+        a.close()
+        b.close()
+
+
+@pytest.mark.duckdb
+def test_duplicates_are_still_caught_when_no_key_is_null(tmp_path):
+    """The negative control for the test above: separating the two checks must
+    not stop real duplicates being caught."""
+    path = str(tmp_path / "dupe_only.duckdb")
+    con = duckdb_write(path)
+    con.execute("create table t (id bigint, v varchar)")
+    con.execute("insert into t values (1,'a'),(1,'b'),(2,'c')")
+    con.close()
+
+    d = open_duckdb(path)
+    try:
+        stats = d.key_stats("main.t", "id")
+        assert not stats.has_null_keys
+        assert stats.has_duplicate_keys
+    finally:
+        d.close()
+
+
+@pytest.mark.parametrize(
+    "table,expected",
+    [("orders", ("main", "orders")), ("sales.orders", ("sales", "orders"))],
+)
+def test_table_names_split_into_schema_and_name(table, expected):
+    from parity.dialects.duckdb_dialect import DuckDBDialect
+
+    assert DuckDBDialect().split_table(table, "main") == expected
+
+
+def test_a_three_part_table_name_is_refused_rather_than_guessed():
+    """`db.schema.table` used to fall through to the unqualified branch and be
+    looked up as a *table* named `db`, so the eventual "table not found" named
+    a schema the user never typed."""
+    from parity.dialects.postgres_dialect import PostgresDialect
+
+    with pytest.raises(ValueError) as exc:
+        PostgresDialect(side="A").split_table("db.public.orders", "public")
+    msg = str(exc.value)
+    assert "3 dot-separated parts" in msg and "side A" in msg

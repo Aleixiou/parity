@@ -85,6 +85,24 @@ class Dialect(ABC):
         """Quote a possibly schema-qualified table name."""
         return ".".join(self.quote(part) for part in table.split("."))
 
+    def split_table(self, table: str, default_schema: str) -> tuple[str, str]:
+        """Split ``schema.table``, refusing anything it cannot honour.
+
+        Without the length check a three-part name like ``db.schema.table``
+        silently fell through to the unqualified branch and was looked up as a
+        *table* called ``db`` in the default schema - so the eventual "table
+        not found" named a schema the user never mentioned.
+        """
+        parts = table.split(".")
+        if len(parts) == 1:
+            return default_schema, parts[0]
+        if len(parts) == 2:
+            return parts[0], parts[1]
+        raise self._err(
+            f"table name {table!r} has {len(parts)} dot-separated parts; "
+            f"expected 'table' or 'schema.table'"
+        )
+
     # ----------------------------------------------------------- rendering
 
     @abstractmethod
@@ -155,15 +173,22 @@ class Dialect(ABC):
         an extra round trip.
         """
         k = self.quote(key)
+        # `count({k})` counts non-NULL keys only, while `count(*)` counts every
+        # row. Carrying both is what lets a NULL key be diagnosed as a NULL key
+        # rather than misreported as a duplicate - `count(distinct)` also
+        # ignores NULLs, so without this a single NULL key looks exactly like a
+        # duplicated one.
         sql = (
-            f"select min({k}), max({k}), count(*), count(distinct {k}) "
+            f"select min({k}), max({k}), count(*), count({k}), count(distinct {k}) "
             f"from {self.qualify(table)}"
         )
-        lo, hi, rows, distinct = self.query(sql)[0]
+        lo, hi, rows, non_null, distinct = self.query(sql)[0]
         if lo is None:
-            return KeyStats(None, None, 0, 0)
+            return KeyStats(None, None, int(rows), 0, int(non_null))
         try:
-            return KeyStats(int(lo), int(hi), int(rows), int(distinct))
+            return KeyStats(
+                int(lo), int(hi), int(rows), int(distinct), int(non_null)
+            )
         except (TypeError, ValueError) as exc:
             # A varchar or uuid key lands here. The bisection arithmetic is
             # integer-only, so say that plainly instead of leaking a cast error.

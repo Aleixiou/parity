@@ -45,8 +45,7 @@ class PostgresDialect(Dialect):
         return '"' + identifier.replace('"', '""') + '"'
 
     def columns(self, table: str) -> list[Column]:
-        parts = table.split(".")
-        schema, name = (parts[0], parts[1]) if len(parts) == 2 else ("public", parts[0])
+        schema, name = self.split_table(table, "public")
         rows = self.query(
             "select column_name, data_type from information_schema.columns "
             f"where table_schema = {_lit(schema)} and table_name = {_lit(name)} "
