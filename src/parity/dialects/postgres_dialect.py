@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from parity.dialects.base import HASH_HEX_CHARS, NULL_SENTINEL, Dialect, map_type
+from parity.dialects.base import HASH_HEX_CHARS, NULL_SENTINEL, Dialect
 from parity.types import Column, LogicalType
 
 
 class PostgresDialect(Dialect):
     name = "postgres"
+    default_schema = "public"
 
     def connect(self, connection_string: str) -> None:
         import psycopg
@@ -55,19 +56,6 @@ class PostgresDialect(Dialect):
 
     def quote(self, identifier: str) -> str:
         return '"' + identifier.replace('"', '""') + '"'
-
-    def columns(self, table: str) -> list[Column]:
-        schema, name = self.split_table(table, "public")
-        rows = self.query(
-            "select column_name, data_type from information_schema.columns "
-            f"where table_schema = {_lit(schema)} and table_name = {_lit(name)} "
-            "order by ordinal_position"
-        )
-        if not rows:
-            raise self._err(
-                f"table not found: {table} (looked in schema {schema!r})"
-            )
-        return [Column(r[0], map_type(r[1]), r[1]) for r in rows]
 
     # ----------------------------------------------------------- rendering
 
@@ -125,6 +113,3 @@ class PostgresDialect(Dialect):
         # numeric is arbitrary precision: cannot overflow no matter the row count.
         return f"coalesce(sum(({expr})::numeric), 0)"
 
-
-def _lit(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"

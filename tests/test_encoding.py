@@ -851,3 +851,71 @@ def test_non_finite_floats_are_still_distinguishable(pg, duck):
     # And across engines, in both directions.
     assert _normalized(pg, "enc_float", 5) != _normalized(duck, "enc_float", 6)
     assert _normalized(duck, "enc_float", 7) != _normalized(pg, "enc_float", 1)
+
+
+# --------------------------------------------------------------------------
+# 7. Identifier case: exact matching, with a useful error when it bites
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.duckdb
+def test_identifiers_are_matched_exactly_including_case(tmp_path):
+    """Identifiers are always quoted, so lookup is exact. That is correct -
+    but unquoted SQL gets folded to lower case by the server, so asking for
+    `Orders` when the server stored `orders` is an easy mistake to make and a
+    miserable one to diagnose from "table not found" alone."""
+    path = str(tmp_path / "case.duckdb")
+    con = duckdb_write(path)
+    con.execute('create table "Orders" (id bigint, "Amount" numeric)')
+    con.execute('insert into "Orders" values (1, 1.5)')
+    con.close()
+
+    d = open_duckdb(path, side="B")
+    try:
+        # Exact name works, and preserves the column's own casing.
+        assert [c.name for c in d.columns("Orders")] == ["id", "Amount"]
+
+        # The wrong case fails - and says why.
+        with pytest.raises(ValueError) as exc:
+            d.columns("orders")
+        msg = str(exc.value)
+        assert "side B" in msg
+        assert "including case" in msg
+        assert "main.Orders" in msg, msg
+
+        # A genuinely absent table gets no misleading suggestion.
+        with pytest.raises(ValueError) as exc:
+            d.columns("totally_absent")
+        assert "did you mean" not in str(exc.value)
+    finally:
+        d.close()
+
+
+@pytest.mark.duckdb
+def test_a_column_whose_name_needs_quoting_round_trips(tmp_path):
+    """Mixed case, spaces and an embedded double quote in a column name."""
+    from parity.engine import diff
+
+    weird = 'we"ird col'
+
+    def make(path: str, value: str) -> str:
+        con = duckdb_write(path)
+        con.execute(f'create table t (id bigint, "Mixed Case" varchar, "{weird.replace(chr(34), chr(34) * 2)}" varchar)')
+        con.execute(f"insert into t values (1, 'x', '{value}')")
+        con.close()
+        return path
+
+    a_path = make(str(tmp_path / "q_a.duckdb"), "same")
+    b_path = make(str(tmp_path / "q_b.duckdb"), "DIFFERENT")
+
+    a, b = open_duckdb(a_path, side="A"), open_duckdb(b_path, side="B")
+    try:
+        names = [c.name for c in a.columns("main.t")]
+        assert names == ["id", "Mixed Case", weird]
+
+        result = diff(a, b, "main.t", "main.t", "id")
+        assert [(d.key, d.kind) for d in result.diffs] == [(1, "different")]
+        assert result.diffs[0].columns == [weird], result.diffs[0].columns
+    finally:
+        a.close()
+        b.close()

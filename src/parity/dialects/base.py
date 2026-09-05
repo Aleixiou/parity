@@ -37,6 +37,12 @@ HASH_HEX_CHARS = 15
 DEFAULT_FLOAT_SCALE = 6
 
 
+def sql_literal(value: str) -> str:
+    """Quote a string literal. Only ever used for schema and table names read
+    back from `information_schema`, never for user data."""
+    return "'" + value.replace("'", "''") + "'"
+
+
 class Dialect(ABC):
     """One database engine's half of a comparison."""
 
@@ -75,8 +81,51 @@ class Dialect(ABC):
 
     # ------------------------------------------------------------ metadata
 
-    @abstractmethod
-    def columns(self, table: str) -> list[Column]: ...
+    #: Where an unqualified table name is looked up. `public` on PostgreSQL,
+    #: `main` on DuckDB.
+    default_schema: str = "public"
+
+    def columns(self, table: str) -> list[Column]:
+        """Introspect a table's columns.
+
+        Both supported engines expose `information_schema.columns`, so this is
+        shared. Override it in a dialect whose engine does not.
+        """
+        schema, name = self.split_table(table, self.default_schema)
+        rows = self.query(
+            "select column_name, data_type from information_schema.columns "
+            f"where table_schema = {sql_literal(schema)} "
+            f"and table_name = {sql_literal(name)} "
+            "order by ordinal_position"
+        )
+        if not rows:
+            raise self._err(self._not_found(table, schema, name))
+        return [Column(r[0], map_type(r[1]), r[1]) for r in rows]
+
+    def _not_found(self, table: str, schema: str, name: str) -> str:
+        """Explain a missing table, and point at a case mismatch if that is it.
+
+        Identifiers are always quoted, so lookup is exact and case-sensitive.
+        That is correct, but unquoted SQL gets folded to lower case by the
+        server, so `--a-table Orders` against a table the server stored as
+        `orders` is a very easy mistake with a very unhelpful default message.
+        """
+        message = f"table not found: {table} (looked in schema {schema!r})"
+        try:
+            near = self.query(
+                "select distinct table_schema, table_name "
+                "from information_schema.columns "
+                f"where lower(table_name) = lower({sql_literal(name)})"
+            )
+        except Exception:  # pragma: no cover - diagnosis must never mask the error
+            return message
+        others = [f"{s}.{t}" for s, t in near if (s, t) != (schema, name)]
+        if others:
+            message += (
+                f". Names are matched exactly, including case - did you mean "
+                f"{' or '.join(sorted(others))}?"
+            )
+        return message
 
     @abstractmethod
     def quote(self, identifier: str) -> str: ...

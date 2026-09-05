@@ -165,6 +165,14 @@ against a generous alias set — and `timestamp` must match by *prefix*, because
 PostgreSQL appends `without time zone`. Default schema differs too: `public`
 on PostgreSQL, `main` on DuckDB.
 
+Both engines expose `information_schema.columns` identically enough that
+`columns()` lives on the base class; a dialect only declares its
+`default_schema`. **Identifier lookup is exact and case-sensitive**, because
+identifiers are always quoted — which is right, but unquoted SQL gets folded to
+lower case by the server, so `--a-table Orders` against a table stored as
+`orders` is an easy mistake. The "table not found" error therefore runs one
+case-insensitive follow-up query and names the near miss.
+
 ### 4.5 Portability traps already discovered
 
 - **`/` is not portable.** PostgreSQL truncates on integer operands; DuckDB

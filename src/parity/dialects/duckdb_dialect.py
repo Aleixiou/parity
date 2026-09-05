@@ -5,12 +5,13 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from parity.dialects.base import HASH_HEX_CHARS, NULL_SENTINEL, Dialect, map_type
+from parity.dialects.base import HASH_HEX_CHARS, NULL_SENTINEL, Dialect
 from parity.types import Column, LogicalType
 
 
 class DuckDBDialect(Dialect):
     name = "duckdb"
+    default_schema = "main"
 
     def connect(self, connection_string: str) -> None:
         import duckdb
@@ -53,19 +54,6 @@ class DuckDBDialect(Dialect):
 
     def quote(self, identifier: str) -> str:
         return '"' + identifier.replace('"', '""') + '"'
-
-    def columns(self, table: str) -> list[Column]:
-        schema, name = self.split_table(table, "main")
-        rows = self.query(
-            "select column_name, data_type from information_schema.columns "
-            f"where table_schema = {_lit(schema)} and table_name = {_lit(name)} "
-            "order by ordinal_position"
-        )
-        if not rows:
-            raise self._err(
-                f"table not found: {table} (looked in schema {schema!r})"
-            )
-        return [Column(r[0], map_type(r[1]), r[1]) for r in rows]
 
     # ----------------------------------------------------------- rendering
 
@@ -119,6 +107,3 @@ class DuckDBDialect(Dialect):
         # DECIMAL(38,0) holds sums far beyond any realistic row count * 2^60.
         return f"coalesce(sum(cast(({expr}) as decimal(38,0))), 0)"
 
-
-def _lit(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
