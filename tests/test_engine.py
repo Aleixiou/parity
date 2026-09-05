@@ -477,17 +477,52 @@ def test_unmapped_types_are_flagged():
 
 
 def test_engine_imports_no_concrete_dialect():
-    """Adding Snowflake must mean one new file and no edit here."""
+    """Adding Snowflake must mean one new file and no edit here.
+
+    This checks imports and executable code, not raw source text. Comments and
+    docstrings naming an engine are the opposite of a problem - CLAUDE.md asks
+    for exactly that on cross-engine behaviour - so an earlier version of this
+    test that grepped the file failed on a docstring explaining why a timestamp
+    check has to read the raw type name.
+    """
+    import ast
     import inspect
 
     import parity.engine
 
-    source = inspect.getsource(parity.engine)
-    for forbidden in ("duckdb", "postgres", "psycopg"):
-        assert forbidden not in source.lower(), (
-            f"engine.py mentions {forbidden!r}; the bisection algorithm must "
-            f"not know which engines exist"
-        )
+    tree = ast.parse(inspect.getsource(parity.engine))
+    forbidden = ("duckdb", "postgres", "psycopg", "snowflake", "bigquery")
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            names = [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            names = [node.module or ""]
+        else:
+            continue
+        for name in names:
+            assert not any(f in name.lower() for f in forbidden), (
+                f"engine.py imports {name!r}; the bisection algorithm must not "
+                f"know which engines exist"
+            )
+
+    # Nor may it branch on one by name. Docstrings are exempt; a string used as
+    # a value is not.
+    docstrings = {
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if node in docstrings:
+                continue
+            assert not any(f in node.value.lower() for f in forbidden), (
+                f"engine.py has the literal {node.value!r}; the bisection "
+                f"algorithm must not know which engines exist"
+            )
+        if isinstance(node, ast.Name):
+            assert not any(f in node.id.lower() for f in forbidden), node.id
 
 
 def test_the_engine_never_builds_sql_itself():
@@ -623,3 +658,42 @@ def test_max_diffs_also_stops_with_whole_segments_still_queued():
     assert "995" not in warning, (
         "the unchecked count should exceed the trimmed diffs alone"
     )
+
+
+def test_a_timezone_aware_column_against_a_naive_one_is_flagged():
+    """`timestamptz` -> `timestamp` is one of the commonest migration changes,
+    and it is invisible to the logical type - both map to TIMESTAMP.
+
+    The comparison itself is correct: sessions are pinned to UTC, so a
+    migration that stored UTC matches. One that stored local wall-clock shows
+    every row as different, and without this warning nothing points at which
+    axis to look along.
+    """
+    aware = [Column("ts", LogicalType.TIMESTAMP, "timestamp with time zone")]
+    naive = [Column("ts", LogicalType.TIMESTAMP, "timestamp without time zone")]
+
+    result, _, _ = run(
+        DictTable(aware, {1: ("2024-01-01 00:00:00.000000",)}),
+        DictTable(naive, {1: ("2024-01-01 00:00:00.000000",)}),
+    )
+    assert result.identical, "matching instants must still compare clean"
+    warning = next(w for w in result.warnings if "timezone-aware" in w)
+    assert "side A" in warning and "side B" in warning
+    assert "UTC" in warning
+
+    # DuckDB reports the same thing in upper case.
+    result, _, _ = run(
+        DictTable(naive, {1: ("x",)}),
+        DictTable([Column("ts", LogicalType.TIMESTAMP, "TIMESTAMP WITH TIME ZONE")],
+                  {1: ("x",)}),
+    )
+    assert any("timezone-aware on side B" in w for w in result.warnings)
+
+
+def test_two_columns_of_the_same_awareness_are_not_flagged():
+    """The negative control: the warning must not fire on matching schemas, or
+    it becomes noise that gets ignored when it matters."""
+    for raw in ("timestamp without time zone", "timestamp with time zone", "TIMESTAMP"):
+        cols = [Column("ts", LogicalType.TIMESTAMP, raw)]
+        result, _, _ = run(DictTable(cols, {1: ("x",)}), DictTable(cols, {1: ("x",)}))
+        assert not [w for w in result.warnings if "timezone" in w], raw

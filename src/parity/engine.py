@@ -98,6 +98,16 @@ def _cancel_on_interrupt(a: Dialect, b: Dialect) -> Iterator[None]:
         raise
 
 
+def _is_tz_aware(column: Column) -> bool:
+    """Whether a column carries a timezone, judged from the engine's own name.
+
+    Both engines report `timestamp with time zone` (DuckDB in upper case), and
+    `map_type` folds it onto TIMESTAMP by prefix - so the logical type cannot
+    tell these apart and the raw name is the only signal there is.
+    """
+    return "with time zone" in column.raw_type.lower()
+
+
 def _select_columns(
     cols_a: dict[str, Column],
     cols_b: dict[str, Column],
@@ -161,6 +171,24 @@ def _select_columns(
             f"column {name!r} is {cols_a[name].raw_type or ta.value} on side A "
             f"but {cols_b[name].raw_type or tb.value} on side B; values are "
             f"compared as text and will very likely all differ"
+        )
+
+    # Timezone-awareness is invisible to the logical type - both sides map to
+    # TIMESTAMP - but it is a real semantic difference and `timestamptz` to
+    # `timestamp` is one of the commonest migration changes there is. Sessions
+    # are pinned to UTC, so a migration that stored UTC compares clean. One
+    # that stored local wall-clock reports *every* row as different, and
+    # without this line there is nothing pointing at which axis to look along.
+    for name in shared:
+        aware_a = _is_tz_aware(cols_a[name])
+        if aware_a is _is_tz_aware(cols_b[name]):
+            continue
+        aware, naive = ("A", "B") if aware_a else ("B", "A")
+        warnings.append(
+            f"column {name!r} is timezone-aware on side {aware} but not on "
+            f"side {naive}; both are read in UTC, so a migration that stored "
+            f"local wall-clock time rather than UTC will show every row as "
+            f"different"
         )
 
     unknown = sorted(
