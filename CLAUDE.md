@@ -174,8 +174,22 @@ identical tables      4 queries    0 rows downloaded            0.75s @ 200k
 one changed row       8 queries    3,906 downloaded (0.195%)    6.5s  @ 2M
 ```
 
+Re-measured at **10,000,000 rows per side**, PostgreSQL 18.4 (native, Windows)
+↔ DuckDB 1.5.5, via `demo/benchmark.py`:
+
+```
+identical tables      4 queries        0 rows downloaded (0.0000%)   19.8s
+5 planted diffs      28 queries    7,628 rows downloaded (0.0381%)   38.4s
+```
+
+The five planted differences are a changed decimal, a deleted row, an inserted
+row at key 999,999,999, a NULL turned into `''`, and a FALSE turned into NULL.
+All five are found exactly, with no false positives, while 0.0381% of the two
+tables crosses the network. Times are the median of three runs.
+
 **An index on the key column makes no difference** — measured 6.54s without
-versus 7.39s with, i.e. noise. This is counter-intuitive and worth
+versus 7.39s with at 2M, and 38.8s without versus 37.3s with at 10M: noise in
+both directions. This is counter-intuitive and worth
 understanding before anyone "optimises" it: the top-level query must hash
 *every row* to produce a full-table checksum, so the cost is CPU-bound on MD5,
 not IO-bound on key lookup. The index only helps the final small-range fetches,
