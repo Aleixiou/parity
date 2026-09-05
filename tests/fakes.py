@@ -47,17 +47,21 @@ class Table:
     columns: list[Column]
 
     def keys_in(self, lo: int, hi: int) -> Iterable[int]:
+        """Every key in the half-open range [lo, hi)."""
         raise NotImplementedError
 
     def row(self, key: int) -> tuple[str, ...]:
+        """The values for one key, in this table's own column order."""
         raise NotImplementedError
 
     def all_keys(self) -> Iterable[int]:
+        """Every key in the table."""
         raise NotImplementedError
 
     # -- derived -----------------------------------------------------------
 
     def key_stats(self) -> KeyStats:
+        """Range and counts for the key column, as a real dialect would report."""
         keys = list(self.all_keys())
         if not keys:
             return KeyStats(None, None, 0, 0)
@@ -76,16 +80,20 @@ class DictTable(Table):
     """A handful of rows spelled out literally. For readable small tests."""
 
     def __init__(self, columns: list[Column], rows: dict[int, tuple[str, ...]]):
+        """Hold a literal set of rows, keyed by their key value."""
         self.columns = columns
         self.rows = dict(rows)
 
     def keys_in(self, lo: int, hi: int) -> Iterable[int]:
+        """Keys inside [lo, hi). Scans the dict, which is fine at this size."""
         return [k for k in self.rows if lo <= k < hi]
 
     def row(self, key: int) -> tuple[str, ...]:
+        """The stored values for one key."""
         return self.rows[key]
 
     def all_keys(self) -> Iterable[int]:
+        """Every key that was spelled out."""
         return list(self.rows)
 
 
@@ -104,6 +112,11 @@ class SyntheticTable(Table):
         deleted: Iterable[int] = (),
         extra: dict[int, tuple[str, ...]] | None = None,
     ):
+        """Describe a table of `n` rows plus whatever differences are planted.
+
+        `changed` replaces a row's values, `deleted` removes keys, and `extra`
+        adds keys outside 1..n. Nothing is materialised.
+        """
         self.n = n
         self.columns = columns or [
             Column("amount", LogicalType.DECIMAL, "decimal(12,2)"),
@@ -116,9 +129,11 @@ class SyntheticTable(Table):
     # The generated row for a key. Deterministic, so both sides agree unless a
     # difference was deliberately planted.
     def _generated(self, key: int) -> tuple[str, ...]:
+        """The default row for a key. Deterministic, so both sides agree."""
         return (f"{key % 1000}.{key % 100:02d}", f"status-{key % 7}")
 
     def row(self, key: int) -> tuple[str, ...]:
+        """Values for one key: planted if it was planted, generated otherwise."""
         if key in self.extra:
             return self.extra[key]
         if key in self.changed:
@@ -126,6 +141,7 @@ class SyntheticTable(Table):
         return self._generated(key)
 
     def keys_in(self, lo: int, hi: int) -> Iterator[int]:
+        """Keys in [lo, hi), yielded lazily so a million rows cost nothing."""
         start, stop = max(1, lo), min(self.n + 1, hi)
         for k in range(start, stop):
             if k not in self.deleted:
@@ -135,6 +151,7 @@ class SyntheticTable(Table):
                 yield k
 
     def all_keys(self) -> Iterator[int]:
+        """Every key, including any planted outside the generated range."""
         return self.keys_in(1, max(self.n, *self.extra) + 1 if self.extra else self.n + 1)
 
 
@@ -150,6 +167,7 @@ class FakeDialect(Dialect):
         float_scale: int = 6,
         key_type_override: Column | None = None,
     ):
+        """Wrap a Table so the engine can drive it as if it were a database."""
         super().__init__(float_scale=float_scale, side=side)
         self.table = table
         self.key_column = key_type_override or Column("id", LogicalType.INTEGER, "bigint")
@@ -162,42 +180,56 @@ class FakeDialect(Dialect):
     # -- contract ----------------------------------------------------------
 
     def connect(self, connection_string: str) -> None:  # pragma: no cover
-        pass
+        """No-op: the data is already in memory."""
 
     def close(self) -> None:
-        pass
+        """No-op: there is nothing to release."""
 
     def query(self, sql: str) -> list[tuple[Any, ...]]:
+        """Always raises - reaching here means the engine built SQL itself.
+
+        This is the load-bearing part of the fake. The engine is supposed to
+        go through the three operations below and never compose SQL of its
+        own, and a passing run is the proof that it did not.
+        """
         raise AssertionError(
             "the engine built SQL directly instead of going through the "
             f"dialect contract: {sql!r}"
         )
 
     def columns(self, table: str) -> list[Column]:
+        """The key column followed by the table's own columns."""
         return [self.key_column, *self.table.columns]
 
     def quote(self, identifier: str) -> str:
+        """Quote an identifier. Never reaches a database, but keeps shapes real."""
         return f'"{identifier}"'
 
     def normalize(self, column: Column) -> str:  # pragma: no cover
+        """Unused: this fake compares Python values, not rendered SQL."""
         return f"norm({column.name})"
 
     def hash_expr(self, text_expr: str) -> str:  # pragma: no cover
+        """Unused: hashing happens in Python here, via `row_hash`."""
         return f"hash({text_expr})"
 
     def int_div(self, numerator: str, denominator: str) -> str:  # pragma: no cover
+        """Unused: bucket arithmetic is done directly in `segment_checksums`."""
         return f"(({numerator}) // ({denominator}))"
 
     def sum_wide(self, expr: str) -> str:  # pragma: no cover
+        """Unused: Python integers are already arbitrary precision."""
         return f"sum({expr})"
 
     def wide_int(self, expr: str) -> str:  # pragma: no cover
+        """Unused: Python integers cannot overflow."""
         # Python integers are already arbitrary precision.
         return f"({expr})"
 
     # -- the three operations the engine actually calls ---------------------
 
     def key_stats(self, table: str, key: str) -> KeyStats:
+        """Key range and counts. Counts as one round trip."""
         self.queries += 1
         return self.table.key_stats()
 
@@ -210,6 +242,11 @@ class FakeDialect(Dialect):
         hi: int,
         n_segments: int,
     ) -> dict[int, tuple[int, int]]:
+        """Row count and checksum per bucket, computed in Python.
+
+        The bucket arithmetic mirrors the SQL expression exactly - truncating
+        integer division - because a test compares the two.
+        """
         self.queries += 1
         span = hi - lo
         out: dict[int, list[int]] = {}
@@ -229,6 +266,7 @@ class FakeDialect(Dialect):
         lo: int,
         hi: int,
     ) -> dict[int, tuple[str, ...]]:
+        """Every row in [lo, hi), and the only thing that counts as downloaded."""
         self.queries += 1
         index = {c.name: i for i, c in enumerate(self.table.columns)}
         out: dict[int, tuple[str, ...]] = {}

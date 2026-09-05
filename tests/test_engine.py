@@ -36,6 +36,7 @@ def run(table_a, table_b, **kwargs):
 
 
 def kinds(result) -> list[tuple[int, str]]:
+    """Every difference as a sorted (key, kind) list, for terse assertions."""
     return sorted((d.key, d.kind) for d in result.diffs)
 
 
@@ -51,6 +52,11 @@ def sql_bucket(key: int, lo: int, hi: int, n: int) -> int:
 
 @pytest.mark.parametrize("seed", range(40))
 def test_bucket_bounds_inverts_the_sql_expression_exactly(seed: int):
+    """The buckets must tile the key range exactly: no gap, no overlap.
+
+    A single uncovered key is a row the walker never looks at while still
+    reporting a clean match - the worst failure this tool can have.
+    """
     rng = random.Random(seed)
     lo = rng.randint(-5_000, 5_000)
     hi = lo + rng.randint(2, 3_000)
@@ -78,6 +84,7 @@ def test_bucket_bounds_inverts_the_sql_expression_exactly(seed: int):
 
 def test_bucket_bounds_handles_a_range_smaller_than_the_factor():
     # n is clamped to the span by the engine, but the maths must hold anyway.
+    """One key per bucket when the range is as small as the fan-out."""
     for i in range(3):
         lo_i, hi_i = bucket_bounds(i, 10, 13, 3)
         assert (lo_i, hi_i) == (10 + i, 11 + i)
@@ -89,6 +96,7 @@ def test_bucket_bounds_handles_a_range_smaller_than_the_factor():
 
 
 def test_identical_million_row_tables_download_zero_rows():
+    """The headline claim: agreement costs four queries and no data transfer."""
     result, a, b = run(SyntheticTable(1_000_000), SyntheticTable(1_000_000))
 
     assert result.identical
@@ -104,6 +112,7 @@ def test_identical_million_row_tables_download_zero_rows():
 
 
 def test_identical_tables_are_not_reported_as_truncated():
+    """A clean run must not carry the partial-answer flag."""
     result, _, _ = run(SyntheticTable(5_000), SyntheticTable(5_000))
     assert result.identical and not result.truncated
 
@@ -114,6 +123,7 @@ def test_identical_tables_are_not_reported_as_truncated():
 
 
 def test_single_changed_row_in_a_million_is_found():
+    """One changed value in a million rows, narrowed to the exact column."""
     key = 734_129
     # Change `amount` only: keep the generated `status` so exactly one column
     # moves and the report can be checked column by column.
@@ -131,18 +141,21 @@ def test_single_changed_row_in_a_million_is_found():
 
 
 def test_a_row_missing_from_b_is_only_in_a():
+    """A row present on one side only is classified by which side has it."""
     result, _, _ = run(SyntheticTable(50_000), SyntheticTable(50_000, deleted=[31_337]))
     assert kinds(result) == [(31_337, "only_in_a")]
     assert result.diffs[0].values_a and not result.diffs[0].values_b
 
 
 def test_a_row_missing_from_a_is_only_in_b():
+    """The mirror of the previous test, so the two sides cannot be swapped."""
     result, _, _ = run(SyntheticTable(50_000, deleted=[7]), SyntheticTable(50_000))
     assert kinds(result) == [(7, "only_in_b")]
     assert result.diffs[0].values_b and not result.diffs[0].values_a
 
 
 def test_all_four_difference_kinds_at_once():
+    """All four failure modes in one table, found exactly and nothing else."""
     a_table = SyntheticTable(
         200_000,
         changed={13: ("1.00", "")},  # empty string ...
@@ -169,6 +182,7 @@ def test_all_four_difference_kinds_at_once():
 
 
 def test_a_row_differing_in_several_columns_names_all_of_them():
+    """Every changed column is reported, not just the first one found."""
     a_table = DictTable(COLS, {1: ("1.00", "paid"), 2: ("2.00", "open")})
     b_table = DictTable(COLS, {1: ("1.00", "paid"), 2: ("9.99", "void")})
     result, _, _ = run(a_table, b_table)
@@ -178,6 +192,7 @@ def test_a_row_differing_in_several_columns_names_all_of_them():
 
 
 def test_differences_are_returned_in_key_order():
+    """Output order is by key, so two runs of the same diff read the same."""
     a_table = SyntheticTable(10_000, deleted=[9_000, 5, 4_321])
     result, _, _ = run(a_table, SyntheticTable(10_000))
     assert [d.key for d in result.diffs] == sorted(d.key for d in result.diffs)
@@ -211,6 +226,7 @@ def test_query_count_grows_logarithmically_not_linearly(n: int):
 
 
 def test_rows_downloaded_stays_a_tiny_fraction_of_the_table():
+    """Finding one row must not drag the table across the network."""
     n = 1_000_000
     result, _, _ = run(SyntheticTable(n), SyntheticTable(n, changed={500_001: ("0.00", "x")}))
     fraction = result.stats.rows_downloaded / n
@@ -218,6 +234,7 @@ def test_rows_downloaded_stays_a_tiny_fraction_of_the_table():
 
 
 def test_engine_query_count_matches_what_the_sides_actually_served():
+    """The reported query count is real, not an estimate the engine keeps itself."""
     result, a, b = run(SyntheticTable(20_000), SyntheticTable(20_000, deleted=[1_234]))
     assert result.stats.queries == a.queries + b.queries
 
@@ -233,6 +250,7 @@ def test_a_sparse_key_space_costs_round_trips_not_scans():
 
 
 def test_bisection_factor_changes_the_shape_of_the_walk():
+    """A wider fan-out means fewer levels, and must not change the answer."""
     n = 500_000
     changed = {n // 2: ("0.00", "x")}
     wide, _, _ = run(SyntheticTable(n), SyntheticTable(n, changed=changed), bisection_factor=256)
@@ -249,6 +267,7 @@ def test_bisection_factor_changes_the_shape_of_the_walk():
 
 
 def test_two_empty_tables_match():
+    """Two empty tables agree, without bisecting a range that does not exist."""
     result, a, b = run(DictTable(COLS, {}), DictTable(COLS, {}))
     assert result.identical
     assert result.stats.rows_downloaded == 0
@@ -256,17 +275,20 @@ def test_two_empty_tables_match():
 
 
 def test_an_empty_side_reports_every_row_as_only_in_the_other():
+    """A dropped table is every row missing, not an error."""
     result, _, _ = run(DictTable(COLS, {1: ("1.00", "a"), 2: ("2.00", "b")}), DictTable(COLS, {}))
     assert kinds(result) == [(1, "only_in_a"), (2, "only_in_a")]
 
 
 def test_a_single_row_table():
+    """The smallest possible comparison still narrows to the changed column."""
     result, _, _ = run(DictTable(COLS, {5: ("1.00", "a")}), DictTable(COLS, {5: ("1.00", "b")}))
     assert kinds(result) == [(5, "different")]
     assert result.diffs[0].columns == ["status"]
 
 
 def test_negative_and_zero_keys_are_handled():
+    """Keys below zero are ordinary; the bucket arithmetic must not assume otherwise."""
     a_table = DictTable(COLS, {-100: ("1.00", "a"), 0: ("2.00", "b"), 100: ("3.00", "c")})
     b_table = DictTable(COLS, {-100: ("1.00", "a"), 0: ("2.00", "CHANGED"), 100: ("3.00", "c")})
     result, _, _ = run(a_table, b_table)
@@ -292,8 +314,10 @@ def test_an_empty_bucket_on_one_side_only_is_not_treated_as_a_match():
 
 
 def test_duplicate_keys_are_refused():
+    """A non-unique key is refused rather than answered wrongly."""
     class Dupes(DictTable):
         def key_stats(self):
+            """Report more rows than distinct keys, as a duplicated key would."""
             from parity.types import KeyStats
 
             return KeyStats(1, 3, 4, 3)  # 4 rows, 3 distinct keys
@@ -306,6 +330,7 @@ def test_duplicate_keys_are_refused():
 
 
 def test_a_non_integer_key_is_refused_by_name_and_type():
+    """A uuid key fails immediately, naming the side and the type."""
     a = FakeDialect(
         DictTable(COLS, {1: ("1", "a")}),
         side="A",
@@ -319,6 +344,7 @@ def test_a_non_integer_key_is_refused_by_name_and_type():
 
 
 def test_a_missing_key_column_lists_what_is_there():
+    """A mistyped key column says what the table actually has."""
     a = FakeDialect(DictTable(COLS, {1: ("1", "a")}), side="A")
     b = FakeDialect(DictTable(COLS, {1: ("1", "a")}), side="B")
     with pytest.raises(ValueError) as exc:
@@ -327,6 +353,7 @@ def test_a_missing_key_column_lists_what_is_there():
 
 
 def test_mismatched_float_scales_are_refused_before_any_query():
+    """Two sides rounding differently would report every float row as changed."""
     a = FakeDialect(DictTable(COLS, {1: ("1", "a")}), side="A", float_scale=6)
     b = FakeDialect(DictTable(COLS, {1: ("1", "a")}), side="B", float_scale=2)
     with pytest.raises(ValueError) as exc:
@@ -337,6 +364,7 @@ def test_mismatched_float_scales_are_refused_before_any_query():
 
 @pytest.mark.parametrize("factor", [-1, 0, 1])
 def test_a_useless_bisection_factor_is_refused(factor: int):
+    """A fan-out below two cannot narrow anything, so it is rejected up front."""
     a = FakeDialect(DictTable(COLS, {1: ("1", "a")}), side="A")
     b = FakeDialect(DictTable(COLS, {1: ("1", "a")}), side="B")
     with pytest.raises(ValueError, match="bisection_factor"):
@@ -349,6 +377,7 @@ def test_a_useless_bisection_factor_is_refused(factor: int):
 
 
 def test_max_diffs_marks_the_result_truncated():
+    """Stopping early must set the flag, not just look like a small clean result."""
     changed = dict.fromkeys(range(1, 5000, 7), ("0.00", "wrong"))
     result, _, _ = run(
         SyntheticTable(100_000), SyntheticTable(100_000, changed=changed), max_diffs=10
@@ -362,6 +391,7 @@ def test_max_diffs_marks_the_result_truncated():
 
 
 def test_a_complete_walk_is_not_marked_truncated_even_at_the_limit():
+    """The negative control: a walk that finished is not partial."""
     a_table = SyntheticTable(10_000, deleted=[100, 200])
     result, _, _ = run(a_table, SyntheticTable(10_000), max_diffs=100)
     assert len(result.diffs) == 2
@@ -374,6 +404,7 @@ def test_a_complete_walk_is_not_marked_truncated_even_at_the_limit():
 
 
 def _sided_tables():
+    """Two tables sharing some columns and each having one of its own."""
     a_cols = [*COLS, Column("only_a", LogicalType.STRING, "varchar")]
     b_cols = [*COLS, Column("only_b", LogicalType.STRING, "varchar")]
     a_table = DictTable(a_cols, {1: ("1.00", "paid", "x"), 2: ("2.00", "open", "y")})
@@ -382,6 +413,7 @@ def _sided_tables():
 
 
 def test_columns_present_on_one_side_only_are_skipped_with_a_warning():
+    """A column only one side has is skipped and said aloud, not treated as a difference."""
     result, _, _ = run(*_sided_tables())
     assert result.identical, "one-sided columns must not create differences"
     assert any("only_a" in w and "side A" in w for w in result.warnings)
@@ -390,6 +422,7 @@ def test_columns_present_on_one_side_only_are_skipped_with_a_warning():
 
 
 def test_exclude_drops_a_column_from_the_comparison():
+    """--exclude genuinely removes a column, proven by a difference disappearing."""
     a_table = DictTable(COLS, {1: ("1.00", "paid")})
     b_table = DictTable(COLS, {1: ("1.00", "CHANGED")})
 
@@ -398,6 +431,7 @@ def test_exclude_drops_a_column_from_the_comparison():
 
 
 def test_columns_restricts_the_comparison():
+    """--columns genuinely narrows, proven by a difference disappearing."""
     a_table = DictTable(COLS, {1: ("1.00", "paid")})
     b_table = DictTable(COLS, {1: ("9.99", "paid")})
 
@@ -406,24 +440,28 @@ def test_columns_restricts_the_comparison():
 
 
 def test_columns_naming_the_key_is_refused():
+    """The key matches rows up; it is not something compared between them."""
     a_table, b_table = _sided_tables()
     with pytest.raises(ValueError, match="key column"):
         run(a_table, b_table, columns=["id"])
 
 
 def test_columns_naming_a_one_sided_column_is_refused():
+    """Asking to compare a column only one side has is a mistake worth naming."""
     a_table, b_table = _sided_tables()
     with pytest.raises(ValueError, match="only one side"):
         run(a_table, b_table, columns=["only_a"])
 
 
 def test_columns_naming_an_unknown_column_is_refused():
+    """A typo in --columns fails loudly rather than silently comparing less."""
     a_table, b_table = _sided_tables()
     with pytest.raises(ValueError, match="unknown columns"):
         run(a_table, b_table, columns=["nope"])
 
 
 def test_columns_and_exclude_contradicting_each_other_is_refused():
+    """Naming the same column in both flags is a contradiction, not a preference."""
     a_table, b_table = _sided_tables()
     with pytest.raises(ValueError, match="both name"):
         run(a_table, b_table, columns=["amount"], exclude=["amount"])
@@ -442,6 +480,7 @@ def test_no_shared_columns_still_checks_key_presence():
 
 
 def test_a_type_mismatch_between_sides_is_called_out():
+    """A schema difference that would report every row as changed is named as one."""
     a_cols = [Column("amount", LogicalType.DECIMAL, "decimal(12,2)")]
     b_cols = [Column("amount", LogicalType.STRING, "varchar")]
     result, _, _ = run(
@@ -463,6 +502,7 @@ def test_decimal_versus_double_is_not_warned_about():
 
 
 def test_unmapped_types_are_flagged():
+    """A type nobody mapped is compared as raw text, and the report says so."""
     a_cols = [Column("payload", LogicalType.UNKNOWN, "json")]
     b_cols = [Column("payload", LogicalType.UNKNOWN, "json")]
     result, _, _ = run(
@@ -532,6 +572,7 @@ def test_the_engine_never_builds_sql_itself():
 
 
 def test_row_hash_helper_matches_the_documented_constant():
+    """The fake hashes exactly as the real dialects do, or its results mean nothing."""
     assert row_hash("abc") == 648541476951500027
 
 
@@ -550,14 +591,17 @@ def test_an_interrupt_cancels_both_sides_and_propagates():
     """
     class Interrupting(FakeDialect):
         def __init__(self, *args, raise_on_checksums=False, **kwargs):
+            """Record whether cancel was called, so the test can assert on it."""
             super().__init__(*args, **kwargs)
             self.raise_on_checksums = raise_on_checksums
             self.cancelled = False
 
         def cancel(self):
+            """Record the cancellation instead of performing one."""
             self.cancelled = True
 
         def segment_checksums(self, *args, **kwargs):
+            """Raise as if the user hit Ctrl-C mid-walk."""
             if self.raise_on_checksums:
                 raise KeyboardInterrupt
             return super().segment_checksums(*args, **kwargs)
@@ -577,9 +621,11 @@ def test_a_failing_cancel_does_not_replace_the_real_error():
     """Diagnosing an interrupt must never lose the interrupt."""
     class Broken(FakeDialect):
         def cancel(self):
+            """Record the cancellation instead of performing one."""
             raise RuntimeError("cancel itself is broken")
 
         def key_stats(self, table, key):
+            """Report more rows than distinct keys, as a duplicated key would."""
             raise KeyboardInterrupt
 
     a = Broken(SyntheticTable(10), side="A")
@@ -601,6 +647,7 @@ def test_gather_returns_both_results_in_order():
 
         # An exception on either side still propagates rather than looping.
         def boom():
+            """Fail, so the gather can be shown to propagate rather than loop."""
             raise ValueError("side failed")
 
         fa = pool.submit(boom)
@@ -611,6 +658,7 @@ def test_gather_returns_both_results_in_order():
 
 @pytest.mark.parametrize("threshold", [0, -1])
 def test_a_useless_threshold_is_refused(threshold: int):
+    """A threshold below one row cannot terminate the walk."""
     a = FakeDialect(DictTable(COLS, {1: ("1", "a")}), side="A")
     b = FakeDialect(DictTable(COLS, {1: ("1", "a")}), side="B")
     with pytest.raises(ValueError, match="threshold"):

@@ -141,6 +141,7 @@ ROW_TABLE = "enc_row"
 
 
 def _ddl(table: str, engine_index: int) -> str:
+    """CREATE TABLE for one fixture table, in the given engine's type names."""
     if table == ROW_TABLE:
         cols = ", ".join(f"{n} {t[engine_index]}" for n, *t in ROW_TABLE_COLUMNS)
         return f"create table {{q}} ({cols})"
@@ -150,6 +151,7 @@ def _ddl(table: str, engine_index: int) -> str:
 
 
 def _inserts(table: str) -> list[str]:
+    """The INSERT statements for one fixture table."""
     if table == ROW_TABLE:
         return [f"insert into {{q}} values ({r})" for r in ROW_TABLE_ROWS]
     return [
@@ -186,6 +188,7 @@ def duck(duckdb_path: str) -> Dialect:
 
 @pytest.fixture(scope="session")
 def pg(pg_url: str) -> Dialect:
+    """Build the PostgreSQL fixtures, then a read-only dialect over them."""
     import psycopg
 
     con = psycopg.connect(pg_url, autocommit=True)
@@ -211,6 +214,7 @@ def pg(pg_url: str) -> Dialect:
 
 
 def _value_column(dialect: Dialect, table: str) -> Column:
+    """The column under test in a single-value fixture table."""
     for col in dialect.columns(_table_name(dialect, table)):
         if col.name == "v":
             return col
@@ -218,10 +222,12 @@ def _value_column(dialect: Dialect, table: str) -> Column:
 
 
 def _table_name(dialect: Dialect, table: str) -> str:
+    """The fixture table's name, qualified for whichever engine this is."""
     return f"{PG_SCHEMA}.{table}" if dialect.name == "postgres" else f"main.{table}"
 
 
 def _normalized(dialect: Dialect, table: str, row_id: int) -> str:
+    """The canonical text one engine produces for one fixture row."""
     col = _value_column(dialect, table)
     sql = (
         f"select {dialect.normalize(col)} from {dialect.qualify(_table_name(dialect, table))} "
@@ -233,6 +239,7 @@ def _normalized(dialect: Dialect, table: str, row_id: int) -> str:
 
 
 def _row_hash(dialect: Dialect, row_id: int) -> int:
+    """The 60-bit row hash one engine computes for one fixture row."""
     table = _table_name(dialect, ROW_TABLE)
     cols = [c for c in dialect.columns(table) if c.name != "id"]
     cols.sort(key=lambda c: c.name)  # the engine compares columns name-sorted
@@ -244,6 +251,7 @@ def _row_hash(dialect: Dialect, row_id: int) -> int:
 
 
 def _row_text(dialect: Dialect, row_id: int) -> str:
+    """The concatenated canonical text one engine produces for one row."""
     table = _table_name(dialect, ROW_TABLE)
     cols = [c for c in dialect.columns(table) if c.name != "id"]
     cols.sort(key=lambda c: c.name)
@@ -271,6 +279,10 @@ CASE_IDS = [
     "table,row_id", [(t, r) for t, r, _ in CASE_IDS], ids=[i for _, _, i in CASE_IDS]
 )
 def test_normalized_text_agrees_across_engines(pg, duck, table: str, row_id: int):
+    """Every documented value renders to byte-identical text on both engines.
+
+    If this ever disagrees, every later result is a lie.
+    """
     a = _normalized(pg, table, row_id)
     b = _normalized(duck, table, row_id)
     assert a == b, (
@@ -458,6 +470,7 @@ def test_separator_prevents_field_smearing(pg, duck):
 
 @pytest.mark.duckdb
 def test_duckdb_hash_constant_without_postgres(duck):
+    """The pinned hash constant, checkable without a PostgreSQL server."""
     got = duck.query(f"select {duck.hash_expr(chr(39) + 'abc' + chr(39))}")[0][0]
     assert int(got) == 648541476951500027
 
@@ -473,6 +486,7 @@ def test_duckdb_dialect_is_read_only(duckdb_path, duck):
 
 @pytest.mark.duckdb
 def test_duckdb_missing_file_names_the_side(tmp_path):
+    """A missing database file says which side it was, not just that it is gone."""
     missing = tmp_path / "nope.duckdb"
     with pytest.raises(ValueError) as exc:
         get_dialect(f"duckdb:///{missing}", side="B")
@@ -507,6 +521,7 @@ def test_duplicate_keys_are_rejected_not_silently_collapsed(tmp_path):
 
 @pytest.mark.duckdb
 def test_key_stats_on_an_empty_table(tmp_path):
+    """An empty table reports no range rather than failing."""
     path = str(tmp_path / "empty.duckdb")
     con = duckdb_write(path)
     con.execute("create table t (id bigint, v varchar)")
@@ -523,6 +538,7 @@ def test_key_stats_on_an_empty_table(tmp_path):
 
 @pytest.mark.duckdb
 def test_non_integer_key_is_reported_clearly(tmp_path):
+    """A text key says so plainly instead of leaking a cast error."""
     path = str(tmp_path / "strkey.duckdb")
     con = duckdb_write(path)
     con.execute("create table t (id varchar, v integer)")
@@ -541,6 +557,7 @@ def test_non_integer_key_is_reported_clearly(tmp_path):
 
 @pytest.mark.duckdb
 def test_table_not_found_names_the_side_and_schema(duck):
+    """A missing table names the side and the schema that was searched."""
     with pytest.raises(ValueError) as exc:
         duck.columns("main.no_such_table")
     msg = str(exc.value)
@@ -584,6 +601,7 @@ def test_table_not_found_names_the_side_and_schema(duck):
     ],
 )
 def test_map_type(raw: str, expected: LogicalType):
+    """The same DDL reports very different type names per engine; all must fold."""
     assert map_type(raw) is expected
 
 
@@ -599,6 +617,7 @@ def test_map_type(raw: str, expected: LogicalType):
     ],
 )
 def test_quoting_is_injection_safe(identifier: str, expected: str):
+    """Identifiers reach SQL through here, so quoting is the injection boundary."""
     from parity.dialects.duckdb_dialect import DuckDBDialect
     from parity.dialects.postgres_dialect import PostgresDialect
 
@@ -607,6 +626,7 @@ def test_quoting_is_injection_safe(identifier: str, expected: str):
 
 
 def test_schema_qualified_names_quote_each_part():
+    """Each half of schema.table is quoted separately, not as one string."""
     from parity.dialects.postgres_dialect import PostgresDialect
 
     d = PostgresDialect()
@@ -615,6 +635,7 @@ def test_schema_qualified_names_quote_each_part():
 
 
 def test_get_dialect_rejects_unknown_scheme():
+    """An engine with no dialect is refused, naming the scheme and the side."""
     with pytest.raises(ValueError) as exc:
         get_dialect("mysql://user@host/db", side="A")
     assert "mysql" in str(exc.value) and "side A" in str(exc.value)
@@ -636,6 +657,7 @@ def test_float_scale_is_per_instance_not_shared():
 
 
 def test_mismatched_float_scales_are_refused_before_any_query():
+    """Two sides rounding differently would report every float row as changed."""
     from parity.dialects.duckdb_dialect import DuckDBDialect
     from parity.dialects.postgres_dialect import PostgresDialect
 
@@ -662,6 +684,7 @@ def test_normalize_is_null_safe_for_every_logical_type():
 
 
 def test_row_text_uses_the_unit_separator():
+    """Fields join with Unit Separator, so adjacent values cannot smear together."""
     from parity.dialects.duckdb_dialect import DuckDBDialect
 
     d = DuckDBDialect()
@@ -713,6 +736,7 @@ def test_a_key_span_spanning_the_whole_bigint_range_still_works(tmp_path):
     assert (keys[-1] - keys[0] + 1) * 32 > 2**63 - 1, "span too small to test"
 
     def make(path: str, changed: int | None = None) -> str:
+        """Build a small fixture database and return its path."""
         con = duckdb_write(path)
         con.execute("create table t (id bigint, v varchar)")
         con.executemany(
@@ -750,6 +774,7 @@ def test_a_null_key_is_reported_as_null_not_as_a_duplicate(tmp_path):
     from parity.engine import diff
 
     def make(path: str, rows: str) -> str:
+        """Build a small fixture database and return its path."""
         con = duckdb_write(path)
         con.execute("create table t (id bigint, v varchar)")
         con.execute(f"insert into t values {rows}")
@@ -802,6 +827,7 @@ def test_duplicates_are_still_caught_when_no_key_is_null(tmp_path):
     [("orders", ("main", "orders")), ("sales.orders", ("sales", "orders"))],
 )
 def test_table_names_split_into_schema_and_name(table, expected):
+    """Qualified and bare table names both resolve to (schema, name)."""
     from parity.dialects.duckdb_dialect import DuckDBDialect
 
     assert DuckDBDialect().split_table(table, "main") == expected
@@ -821,11 +847,13 @@ def test_a_three_part_table_name_is_refused_rather_than_guessed():
 
 @pytest.mark.duckdb
 def test_duckdb_sessions_are_pinned_to_utc(duck):
+    """Left unpinned, timestamptz would render through the machine's own zone."""
     assert duck.query("select current_setting('TimeZone')")[0][0] == "UTC"
 
 
 @pytest.mark.postgres
 def test_postgres_sessions_are_pinned_to_utc(pg):
+    """Left unpinned, timestamptz would render through the server's own zone."""
     assert pg.query("show timezone")[0][0] == "UTC"
 
 
@@ -899,6 +927,7 @@ def test_a_column_whose_name_needs_quoting_round_trips(tmp_path):
     weird = 'we"ird col'
 
     def make(path: str, value: str) -> str:
+        """Build a small fixture database and return its path."""
         con = duckdb_write(path)
         con.execute(f'create table t (id bigint, "Mixed Case" varchar, "{weird.replace(chr(34), chr(34) * 2)}" varchar)')
         con.execute(f"insert into t values (1, 'x', '{value}')")
@@ -939,6 +968,7 @@ def test_a_column_whose_name_needs_quoting_round_trips(tmp_path):
     ],
 )
 def test_duckdb_connection_string_paths(connection_string: str, expected: str):
+    """The slash count carries meaning, as in sqlite and SQLAlchemy."""
     from parity.dialects.duckdb_dialect import duckdb_path
 
     assert duckdb_path(connection_string) == expected
@@ -992,6 +1022,7 @@ def test_the_package_re_exports_lazily_without_importing_drivers():
 
 @pytest.mark.parametrize("scale", [-1, -6])
 def test_a_negative_float_scale_is_refused(scale: int):
+    """A scale below zero is meaningless and is rejected at construction."""
     from parity.dialects.duckdb_dialect import DuckDBDialect
 
     with pytest.raises(ValueError, match="float_scale must be >= 0"):
@@ -1018,6 +1049,7 @@ def test_the_empty_column_hash_actually_runs(tmp_path):
     from parity.engine import diff
 
     def make(path: str, rows: str) -> str:
+        """Build a small fixture database and return its path."""
         con = duckdb_write(path)
         con.execute("create table t (id bigint, only_here varchar)")
         con.execute(f"insert into t values {rows}")
@@ -1055,6 +1087,7 @@ def test_an_in_memory_dialect_works_and_is_not_read_only():
 
 
 def _wide_columns(n: int) -> list[Column]:
+    """A list of n plain string columns, for the wide-table tests."""
     return [Column(f"c{i}", LogicalType.STRING, "varchar") for i in range(n)]
 
 
@@ -1075,6 +1108,7 @@ def test_a_narrow_table_still_renders_exactly_one_flat_concat():
 
 
 def test_a_wide_table_nests_rather_than_exceeding_the_argument_limit():
+    """No single concat call may carry more values than the strictest engine allows."""
     from parity.dialects.base import MAX_CONCAT_ARGS
     from parity.dialects.duckdb_dialect import DuckDBDialect
     from parity.dialects.postgres_dialect import PostgresDialect
@@ -1169,6 +1203,7 @@ def test_unicode_table_and_column_names_round_trip(tmp_path):
     from parity.engine import diff
 
     def make(path: str, value: str) -> str:
+        """Build a small fixture database and return its path."""
         con = duckdb_write(path)
         con.execute('create table "ünïcode" (id bigint, "日本語" varchar, "café" varchar)')
         con.execute(f"insert into \"ünïcode\" values (1, 'あ', 'x'), (2, '{value}', 'y')")
@@ -1206,6 +1241,7 @@ def test_keys_spanning_the_entire_bigint_range(tmp_path):
     lo, hi = -(2**63) + 1, 2**63 - 1
 
     def make(path: str, middle: str) -> str:
+        """Build a small fixture database and return its path."""
         con = duckdb_write(path)
         con.execute("create table t (id bigint, v varchar)")
         con.execute(
@@ -1235,6 +1271,7 @@ def test_the_largest_and_smallest_keys_are_not_skipped(tmp_path):
     lo, hi = -(2**63) + 1, 2**63 - 1
 
     def make(path: str, low_v: str, high_v: str) -> str:
+        """Build a small fixture database and return its path."""
         con = duckdb_write(path)
         con.execute("create table t (id bigint, v varchar)")
         con.execute(f"insert into t values ({lo}, '{low_v}'), ({hi}, '{high_v}')")
@@ -1279,4 +1316,32 @@ def test_the_contributor_guide_lists_exactly_the_abstract_methods():
         f"CONTRIBUTING.md is out of step with the Dialect contract.\n"
         f"  only in code:  {sorted(in_code - in_guide)}\n"
         f"  only in guide: {sorted(in_guide - in_code)}"
+    )
+
+
+def test_every_function_has_a_docstring():
+    """Nothing in this project ships without an explanation underneath it.
+
+    A rule that is only a convention decays; this makes it a build failure.
+    Test names here are deliberately whole sentences, so a docstring should
+    say what would break if the function went away, not restate the name.
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    undocumented = []
+    for folder in ("src", "tests", "demo"):
+        for path in sorted((root / folder).rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if ast.get_docstring(node) is None:
+                    undocumented.append(
+                        f"{path.relative_to(root)}:{node.lineno} {node.name}"
+                    )
+
+    assert not undocumented, "functions with no docstring:\n  " + "\n  ".join(
+        undocumented
     )

@@ -83,6 +83,7 @@ def plant_keys(n: int) -> dict[str, int]:
 
 
 def build_duckdb(path: str, n: int) -> float:
+    """Create the DuckDB side from scratch. Returns seconds taken."""
     import duckdb
 
     if os.path.exists(path):
@@ -97,6 +98,7 @@ def build_duckdb(path: str, n: int) -> float:
 
 
 def build_postgres(url: str, n: int, index: bool) -> float:
+    """Create the PostgreSQL side from the same expression. Returns seconds."""
     import psycopg
 
     started = time.perf_counter()
@@ -116,6 +118,11 @@ def build_postgres(url: str, n: int, index: bool) -> float:
 
 
 def plant(url: str, n: int) -> list[str]:
+    """Apply the five planted differences to side A. Returns their labels.
+
+    Only side A is touched, so any difference the tool later reports is either
+    one of these or a bug.
+    """
     import psycopg
 
     keys = plant_keys(n)
@@ -131,6 +138,7 @@ def plant(url: str, n: int) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Build the dataset, or with --plant, seed it with known differences."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rows", type=int, default=10_000_000)
     parser.add_argument("--pg", default=DEFAULT_PG)

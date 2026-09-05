@@ -104,6 +104,7 @@ def duck_path(tmp_path_factory) -> str:
 
 @pytest.fixture(scope="module")
 def duck(duck_path):
+    """Side B: one pristine table, opened read-only."""
     d = open_duckdb(duck_path, side="B")
     yield d
     d.close()
@@ -131,6 +132,7 @@ def pg_tables(pg_url):
 
 @pytest.fixture(scope="module")
 def pg(pg_url, pg_tables):
+    """Side A's dialect, over the tables the fixture above created."""
     d = open_pg(pg_url, side="A")
     yield d
     d.close()
@@ -145,6 +147,7 @@ pytestmark = pytest.mark.postgres
 
 
 def test_identical_tables_across_engines_download_nothing(pg, pg_tables, duck):
+    """The core claim, across two genuinely different engines."""
     result = diff(pg, duck, pg_tables["clean"], "main.orders", "id")
 
     assert result.identical, [
@@ -160,6 +163,7 @@ def test_identical_tables_across_engines_download_nothing(pg, pg_tables, duck):
 
 @pytest.mark.parametrize("name", [n for n, (_, e) in PLANTS.items() if e])
 def test_each_planted_difference_is_found_exactly(pg, pg_tables, duck, name):
+    """Each planted defect is found, alone, and named by kind and column."""
     key, kind, columns = PLANTS[name][1]
     result = diff(pg, duck, pg_tables[name], "main.orders", "id")
 
@@ -281,6 +285,7 @@ def test_engines_can_be_swapped_without_changing_the_verdict(pg, pg_tables, duck
 
 
 def _cli(pg_url: str, table: str, duck_path: str, *extra: str) -> tuple[int, str]:
+    """Drive the real CLI across the two engines. Returns (code, output)."""
     import io
 
     out = io.StringIO()
@@ -298,6 +303,7 @@ def _cli(pg_url: str, table: str, duck_path: str, *extra: str) -> tuple[int, str
 
 
 def test_cli_exit_codes_across_engines(pg_url, pg_tables, duck_path):
+    """0, 1 and 2 all reachable through the real command line, cross-engine."""
     code, out = _cli(pg_url, pg_tables["clean"], duck_path)
     assert code == EXIT_IDENTICAL, out
 
@@ -310,6 +316,7 @@ def test_cli_exit_codes_across_engines(pg_url, pg_tables, duck_path):
 
 
 def test_cli_json_across_engines(pg_url, pg_tables, duck_path):
+    """--json carries the NULL-versus-empty-string trap as raw canonical text."""
     code, out = _cli(pg_url, pg_tables["null_trap"], duck_path, "--json")
     payload = json.loads(out)
 

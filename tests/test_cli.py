@@ -46,6 +46,7 @@ from generate_series(1, {n}) as s(i)
 
 
 def build(path: str, n: int = 5_000, plant: str | None = None) -> str:
+    """Create a DuckDB file of n rows, optionally with one planted defect."""
     con = duckdb_write(path)
     con.execute(SCHEMA)
     con.execute(ROWS.format(n=n))
@@ -84,16 +85,19 @@ def build(path: str, n: int = 5_000, plant: str | None = None) -> str:
 
 @pytest.fixture(scope="module")
 def base(tmp_path_factory) -> str:
+    """The reference table every test in this file compares against."""
     return build(str(tmp_path_factory.mktemp("cli") / "base.duckdb"))
 
 
 def run_cli(*argv: str) -> tuple[int, str, str]:
+    """Drive the real CLI and capture what it wrote. Returns (code, out, err)."""
     out, err = io.StringIO(), io.StringIO()
     code = main(list(argv), out=out, err=err)
     return code, out.getvalue(), err.getvalue()
 
 
 def diff_args(a: str, b: str, *extra: str) -> list[str]:
+    """The argument list for a diff between two DuckDB files."""
     return [
         "diff",
         "--a", f"duckdb:///{a}", "--a-table", "main.orders",
@@ -108,6 +112,7 @@ def diff_args(a: str, b: str, *extra: str) -> list[str]:
 
 
 def test_identical_tables_exit_zero(base, tmp_path):
+    """Exit 0 and zero rows moved - the clean case a CI job sees most often."""
     other = build(str(tmp_path / "same.duckdb"))
     code, out, err = run_cli(*diff_args(base, other))
     assert code == EXIT_IDENTICAL, err
@@ -126,6 +131,7 @@ def test_identical_tables_exit_zero(base, tmp_path):
     ],
 )
 def test_each_planted_difference_exits_one_and_is_named(base, tmp_path, plant, expect):
+    """Each defect exits 1 and is described by kind, not merely counted."""
     other = build(str(tmp_path / f"{plant}.duckdb"), plant=plant)
     code, out, err = run_cli(*diff_args(base, other))
     assert code == EXIT_DIFFERENCES, err
@@ -141,6 +147,7 @@ def test_a_broken_connection_string_exits_two_not_one(base, tmp_path):
 
 
 def test_an_unknown_table_names_the_side(base):
+    """A wrong table name says which of the two sides was wrong."""
     code, out, err = run_cli(
         "diff",
         "--a", f"duckdb:///{base}", "--a-table", "main.orders",
@@ -152,18 +159,21 @@ def test_an_unknown_table_names_the_side(base):
 
 
 def test_an_unknown_key_column_lists_the_real_ones(base):
+    """A mistyped key column shows what the table actually has."""
     code, out, err = run_cli(*diff_args(base, base, "--key", "order_id"))
     assert code == EXIT_ERROR
     assert "order_id" in err and "customer_id" in err
 
 
 def test_a_non_integer_key_is_refused(base):
+    """A text key is rejected before the walk, not as a cast error inside it."""
     code, out, err = run_cli(*diff_args(base, base, "--key", "status"))
     assert code == EXIT_ERROR
     assert "integer" in err and "status" in err
 
 
 def test_a_duplicate_key_is_refused_rather_than_answered_wrongly(base, tmp_path):
+    """A non-unique key exits 2. Answering at all would mean answering wrongly."""
     other = build(str(tmp_path / "dupes.duckdb"), plant="duplicate_key")
     code, out, err = run_cli(*diff_args(base, other))
     assert code == EXIT_ERROR
@@ -171,6 +181,7 @@ def test_a_duplicate_key_is_refused_rather_than_answered_wrongly(base, tmp_path)
 
 
 def test_an_unsupported_scheme_exits_two(base):
+    """An engine nobody wrote a dialect for is an error, not a difference."""
     code, out, err = run_cli(
         "diff",
         "--a", "mysql://user@host/db", "--a-table", "t",
@@ -182,6 +193,7 @@ def test_an_unsupported_scheme_exits_two(base):
 
 
 def test_no_subcommand_prints_help_and_exits_two():
+    """Running bare prints help rather than failing silently."""
     code, out, err = run_cli()
     assert code == EXIT_ERROR
     assert "usage: parity" in out
@@ -193,6 +205,7 @@ def test_no_subcommand_prints_help_and_exits_two():
 
 
 def test_human_output_leads_with_the_verdict_then_the_evidence(base, tmp_path):
+    """Verdict first, then cost, then the rows - in that order."""
     other = build(str(tmp_path / "changed.duckdb"), plant="changed")
     code, out, _ = run_cli(*diff_args(base, other))
     lines = [line for line in out.splitlines() if line.strip()]
@@ -215,6 +228,7 @@ def test_the_float_scale_is_always_stated(base):
 
 
 def test_the_downloaded_percentage_is_always_printed(base, tmp_path):
+    """The number that proves the tool pushed work into the engines is never omitted."""
     other = build(str(tmp_path / "pct.duckdb"), plant="changed")
     for args in ([], ["--json"]):
         code, out, _ = run_cli(*diff_args(base, other, *args))
@@ -222,6 +236,7 @@ def test_the_downloaded_percentage_is_always_printed(base, tmp_path):
 
 
 def test_quiet_prints_nothing_but_still_signals_through_the_exit_code(base, tmp_path):
+    """--quiet is for CI: no output, same verdict."""
     other = build(str(tmp_path / "quiet.duckdb"), plant="changed")
     code, out, err = run_cli(*diff_args(base, other, "--quiet"))
     assert code == EXIT_DIFFERENCES
@@ -249,6 +264,7 @@ def test_warnings_are_surfaced_not_buried(base, tmp_path):
 
 
 def test_json_output_parses_and_carries_the_verdict(base, tmp_path):
+    """--json parses, and carries the verdict and the evidence a script needs."""
     other = build(str(tmp_path / "json.duckdb"), plant="changed")
     code, out, _ = run_cli(*diff_args(base, other, "--json"))
     payload = json.loads(out)
@@ -272,6 +288,7 @@ def test_json_output_parses_and_carries_the_verdict(base, tmp_path):
 
 
 def test_json_on_identical_tables_reports_zero_downloaded(base, tmp_path):
+    """The clean case in machine-readable form."""
     other = build(str(tmp_path / "json_same.duckdb"))
     code, out, _ = run_cli(*diff_args(base, other, "--json"))
     payload = json.loads(out)
@@ -284,6 +301,7 @@ def test_json_on_identical_tables_reports_zero_downloaded(base, tmp_path):
 
 
 def test_json_lists_the_columns_actually_compared(base):
+    """A consumer can see what was compared, not just the result."""
     code, out, _ = run_cli(*diff_args(base, base, "--exclude", "note,status", "--json"))
     payload = json.loads(out)
     assert payload["columns_compared"] == [
@@ -297,6 +315,7 @@ def test_json_lists_the_columns_actually_compared(base):
 
 
 def test_max_diffs_marks_the_result_partial_in_both_formats(base, tmp_path):
+    """A capped run reads as partial to a person and to a script alike."""
     path = str(tmp_path / "many.duckdb")
     con = duckdb_write(path)
     con.execute(SCHEMA)
@@ -325,6 +344,7 @@ def test_a_truncated_run_never_reports_identical(base, tmp_path):
 
 
 def test_exclude_can_hide_a_real_difference_and_that_is_visible(base, tmp_path):
+    """--exclude can hide a genuine difference, so the columns compared are reported."""
     other = build(str(tmp_path / "excl.duckdb"), plant="changed")
 
     code, _, _ = run_cli(*diff_args(base, other))
@@ -337,6 +357,7 @@ def test_exclude_can_hide_a_real_difference_and_that_is_visible(base, tmp_path):
 
 
 def test_columns_restricts_the_comparison(base, tmp_path):
+    """--columns narrows the comparison, proven by a difference disappearing."""
     other = build(str(tmp_path / "cols.duckdb"), plant="changed")
     code, out, _ = run_cli(*diff_args(base, other, "--columns", "status,note", "--json"))
     payload = json.loads(out)
@@ -345,6 +366,7 @@ def test_columns_restricts_the_comparison(base, tmp_path):
 
 
 def test_columns_naming_the_key_is_refused(base):
+    """The key matches rows up; comparing it against itself is meaningless."""
     code, out, err = run_cli(*diff_args(base, base, "--columns", "id"))
     assert code == EXIT_ERROR
     assert "key column" in err
@@ -373,6 +395,7 @@ def test_bisection_factor_and_threshold_do_not_change_the_answer(base, tmp_path)
 
 
 def test_version_and_help_need_no_database_driver():
+    """--help and --version work before any driver is installed."""
     for flag in ("--version", "--help"):
         with pytest.raises(SystemExit) as exc:
             main([flag])
@@ -544,6 +567,7 @@ def test_the_cli_default_caps_differences_and_says_so(base, tmp_path):
 
 
 def test_max_diffs_zero_means_no_limit(base, tmp_path):
+    """Zero is the documented way to ask for every difference."""
     path = str(tmp_path / "nolimit.duckdb")
     con = duckdb_write(path)
     con.execute(SCHEMA)

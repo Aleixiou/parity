@@ -37,6 +37,11 @@ KIND_LABELS = {
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the whole command line surface.
+
+    Split out from `main` so `--help` can be rendered, and the flags asserted,
+    without running anything or importing a database driver.
+    """
     parser = argparse.ArgumentParser(
         prog="parity",
         description=(
@@ -98,6 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _split(value: str | None) -> list[str]:
+    """Turn a comma-separated flag value into a list, ignoring blanks.
+
+    So `--exclude "a, b,"` gives ["a", "b"] rather than an empty column name
+    that would later fail to match anything.
+    """
     if not value:
         return []
     return [part.strip() for part in value.split(",") if part.strip()]
@@ -109,6 +119,7 @@ def _split(value: str | None) -> list[str]:
 
 
 def _plural(n: int, word: str) -> str:
+    """Format a count with its noun, pluralised and thousands-separated."""
     return f"{n:,} {word}{'' if n == 1 else 's'}"
 
 
@@ -154,6 +165,12 @@ def _display(value: str) -> str:
 
 
 def render_human(result: DiffResult, out: TextIO) -> None:
+    """Write the report a person reads: verdict first, then the evidence.
+
+    The rows-downloaded percentage is always printed - it is the proof that
+    the tool pushed the work into the engines, and a figure that suddenly
+    reads 100% is how someone finds out their key column is wrong.
+    """
     sym = _symbols(out)
     stats = result.stats
     total = max(stats.rows_compared_a, stats.rows_compared_b)
@@ -220,6 +237,12 @@ def render_human(result: DiffResult, out: TextIO) -> None:
 
 
 def _render_diff(d: RowDiff, out: TextIO) -> None:
+    """Write one difference.
+
+    A changed row shows both values side by side, which is far easier to scan
+    for the character that moved - until the values are too long to share a
+    line, at which point they stack.
+    """
     label = KIND_LABELS[d.kind]
     if d.kind != "different":
         print(f"  {label:<11} key {d.key}", file=out)
@@ -246,6 +269,13 @@ def _render_diff(d: RowDiff, out: TextIO) -> None:
 
 
 def to_dict(result: DiffResult) -> dict[str, Any]:
+    """Shape the result for `--json`.
+
+    Carries the raw canonical text rather than the human-friendly rendering,
+    so a machine sees exactly what was compared. `identical` is false whenever
+    the walk was cut short, so a consumer reading only that field cannot be
+    misled by a partial run.
+    """
     stats = result.stats
     moveable = stats.rows_compared_a + stats.rows_compared_b
     return {
@@ -289,6 +319,11 @@ def to_dict(result: DiffResult) -> dict[str, Any]:
 
 
 def _run_diff(args: argparse.Namespace, out: TextIO) -> int:
+    """Open both sides, run the comparison, render it, and return the exit code.
+
+    Both connections are closed even when the diff raises, and each is opened
+    separately so a failure can name which side it was.
+    """
     # Imported here, not at module scope, so `parity --help` works with no
     # database driver installed at all.
     from parity.dialects.base import get_dialect
@@ -336,6 +371,13 @@ def main(
     out: TextIO | None = None,
     err: TextIO | None = None,
 ) -> int:
+    """Entry point. Returns the exit code rather than calling sys.exit.
+
+    `out` and `err` are injectable so the tests can drive the real CLI and
+    read what it wrote. Anything that is not a clean verdict returns 2, never
+    1 - a CI job has to be able to tell "the tables differ" from "the tool
+    broke".
+    """
     out = out if out is not None else sys.stdout
     err = err if err is not None else sys.stderr
 

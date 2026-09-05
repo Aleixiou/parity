@@ -256,6 +256,7 @@ def diff(
             *args_a: Any,
             _args_b: tuple[Any, ...] | None = None,
         ) -> tuple[Any, Any]:
+            """Call the same method on both sides at once and wait for both."""
             fa = pool.submit(getattr(a, fn_name), a_table, *args_a)
             fb = pool.submit(getattr(b, fn_name), b_table, *(_args_b or args_a))
             stats.queries += 2
@@ -325,6 +326,7 @@ def diff(
             queue: list[tuple[int, int]] = [(lo, hi)]
 
             def limit_reached() -> bool:
+                """Whether enough differences have been collected to stop."""
                 return max_diffs is not None and len(diffs) >= max_diffs
 
             while queue:

@@ -1,4 +1,9 @@
-"""PostgreSQL dialect."""
+"""PostgreSQL dialect.
+
+One half of a comparison. Everything here is either an engine-specific spelling
+of something in the `Dialect` contract, or a workaround for a place where
+PostgreSQL and DuckDB disagree - and every workaround says which.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +23,12 @@ class PostgresDialect(Dialect):
     default_schema = "public"
 
     def connect(self, connection_string: str) -> None:
+        """Open a read-only, UTC-pinned, single-snapshot session.
+
+        Four settings, in this order, and the order matters: the timezone is
+        set while autocommit is still on so it sticks to the session rather
+        than to a transaction that never commits.
+        """
         import psycopg
 
         # psycopg understands postgres:// and postgresql:// URLs directly.
@@ -52,19 +63,31 @@ class PostgresDialect(Dialect):
         self._conn.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
 
     def cancel(self) -> None:
+        """Abort the query currently running on this connection.
+
+        Called from the main thread while a worker is blocked in the driver,
+        so it has to be safe across threads.
+        """
         # Safe to call from another thread; psycopg opens its own
         # connection to the server to deliver the cancel request.
         self._conn.cancel()
 
     def close(self) -> None:
+        """Close the connection, ending the snapshot the diff was reading."""
         self._conn.close()
 
     def query(self, sql: str) -> list[tuple[Any, ...]]:
+        """Run `sql` and return every row. psycopg hands back tuples already."""
         with self._conn.cursor() as cur:
             cur.execute(sql)
             return cur.fetchall()
 
     def _exists_but_unreadable(self, schema: str, name: str) -> bool:
+        """Is the table really there, with this role simply unable to see it?
+
+        Distinguishes a missing GRANT from a missing table, which arrive as the
+        same empty result from `information_schema`.
+        """
         # pg_catalog is world-readable, unlike information_schema, which is
         # filtered to what the current role holds privileges on.
         try:
@@ -79,11 +102,22 @@ class PostgresDialect(Dialect):
         return bool(rows)
 
     def quote(self, identifier: str) -> str:
+        """Wrap an identifier in double quotes, doubling any it contains.
+
+        This is the injection boundary: table and column names arrive from the
+        command line and reach SQL through here.
+        """
         return '"' + identifier.replace('"', '""') + '"'
 
     # ----------------------------------------------------------- rendering
 
     def normalize(self, column: Column) -> str:
+        """Render one column as canonical text, null-safe.
+
+        The contract: two rows are equal if and only if this text is
+        byte-identical to the other engine's. Every branch ends up inside the
+        `coalesce` at the bottom, so a NULL always becomes the sentinel.
+        """
         c = self.quote(column.name)
         t = column.logical_type
         if t is LogicalType.INTEGER:
@@ -119,9 +153,15 @@ class PostgresDialect(Dialect):
         return f"coalesce({expr}, '{NULL_SENTINEL}')"
 
     def hash_expr(self, text_expr: str) -> str:
+        """Fold canonical text into a positive 60-bit integer.
+
+        60 bits, not 64: at 64 PostgreSQL's bit-to-bigint cast wraps negative
+        and the two engines stop agreeing.
+        """
         return f"(('x' || substr(md5({text_expr}), 1, {HASH_HEX_CHARS}))::bit(60)::bigint)"
 
     def int_div(self, numerator: str, denominator: str) -> str:
+        """Exact integer division, truncating toward zero."""
         # `div()` is PostgreSQL's exact integer quotient and truncates toward
         # zero, matching Python's `//` for the non-negative operands used here.
         # Plain `/` is right for bigints but silently yields a scaled, rounded
@@ -130,10 +170,12 @@ class PostgresDialect(Dialect):
         return f"div(({numerator})::numeric, ({denominator})::numeric)"
 
     def wide_int(self, expr: str) -> str:
+        """Widen an integer past 64 bits, before any arithmetic touches it."""
         # numeric is arbitrary precision: the key offset cannot overflow it.
         return f"(({expr})::numeric)"
 
     def sum_wide(self, expr: str) -> str:
+        """Sum row hashes without overflowing, and return 0 for an empty group."""
         # numeric is arbitrary precision: cannot overflow no matter the row count.
         return f"coalesce(sum(({expr})::numeric), 0)"
 

@@ -60,6 +60,11 @@ class Dialect(ABC):
         float_scale: int = DEFAULT_FLOAT_SCALE,
         side: str = "?",
     ) -> None:
+        """Configure one side of a comparison.
+
+        Both settings are per-instance rather than per-class, which matters:
+        see `float_scale` below for what a shared class attribute would do.
+        """
         if float_scale < 0:
             raise ValueError(f"float_scale must be >= 0, got {float_scale}")
         #: Decimal places at which DECIMAL/FLOAT columns are compared. This is
@@ -73,18 +78,25 @@ class Dialect(ABC):
         self.side = side
 
     def _err(self, message: str) -> ValueError:
+        """Build an error that names which side and which engine it came from.
+
+        "table not found" is useless when two databases are in play.
+        """
         return ValueError(f"[side {self.side}: {self.name}] {message}")
 
     # ---------------------------------------------------------------- setup
 
     @abstractmethod
-    def connect(self, connection_string: str) -> None: ...
+    def connect(self, connection_string: str) -> None:
+        """Open a connection. Must be read-only, and should pin UTC."""
 
     @abstractmethod
-    def close(self) -> None: ...
+    def close(self) -> None:
+        """Close the connection."""
 
     @abstractmethod
-    def query(self, sql: str) -> list[tuple[Any, ...]]: ...
+    def query(self, sql: str) -> list[tuple[Any, ...]]:
+        """Run `sql` and return every row as a list of tuples."""
 
     def cancel(self) -> None:  # noqa: B027 - optional by design, see below
         """Abort whatever query is in flight, from another thread.
@@ -165,7 +177,8 @@ class Dialect(ABC):
         return False
 
     @abstractmethod
-    def quote(self, identifier: str) -> str: ...
+    def quote(self, identifier: str) -> str:
+        """Quote one identifier. The injection boundary - see the dialects."""
 
     def qualify(self, table: str) -> str:
         """Quote a possibly schema-qualified table name."""
@@ -232,6 +245,12 @@ class Dialect(ABC):
     # ------------------------------------------------------------ building
 
     def row_text(self, columns: Sequence[Column]) -> str:
+        """Join every column's canonical text into one string per row.
+
+        Fields are separated by ASCII Unit Separator, which effectively never
+        occurs in warehouse string data - so ("ab", "c") cannot collide with
+        ("a", "bc").
+        """
         if not columns:
             # Two tables can legitimately share only their key - after
             # `--columns`/`--exclude`, or when the schemas have diverged
@@ -268,6 +287,11 @@ class Dialect(ABC):
         return self._concat(groups)
 
     def row_hash(self, columns: Sequence[Column]) -> str:
+        """Fold a whole row down to one 60-bit integer, inside the engine.
+
+        This is what makes the tool cheap: summed per bucket, it means a few
+        integers cross the network instead of the table.
+        """
         return self.hash_expr(self.row_text(columns))
 
     # ------------------------------------------------------------- queries

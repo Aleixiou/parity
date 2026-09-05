@@ -62,18 +62,22 @@ class KeyStats:
 
     @property
     def empty(self) -> bool:
+        """True when the table holds no rows at all."""
         return self.rows == 0
 
     @property
     def null_keys(self) -> int:
+        """How many rows have no key. Such a row cannot be matched to anything."""
         return 0 if self.non_null is None else self.rows - self.non_null
 
     @property
     def has_null_keys(self) -> bool:
+        """Whether any key is NULL. Checked before uniqueness, deliberately."""
         return self.null_keys > 0
 
     @property
     def has_duplicate_keys(self) -> bool:
+        """Whether the key repeats, which would collapse rows during comparison."""
         # Compare like with like: `count(distinct k)` ignores NULLs, so
         # measuring it against `count(*)` would report every NULL key as a
         # duplicate and send the reader hunting for duplicates that do not
@@ -122,4 +126,5 @@ class DiffResult:
         return not self.diffs and not self.truncated
 
     def by_kind(self, kind: str) -> list[RowDiff]:
+        """The differences of one kind: only_in_a, only_in_b or different."""
         return [d for d in self.diffs if d.kind == kind]

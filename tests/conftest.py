@@ -24,6 +24,11 @@ PG_SCHEMA = "parity_test"
 
 
 def _pg_available() -> tuple[bool, str]:
+    """Can we reach PostgreSQL? Returns (yes/no, why not).
+
+    The reason is carried through to the skip message, so a skipped run says
+    what was wrong rather than just vanishing.
+    """
     try:
         import psycopg
     except ImportError:  # pragma: no cover - depends on install extras
@@ -36,6 +41,7 @@ def _pg_available() -> tuple[bool, str]:
 
 
 def _duckdb_available() -> tuple[bool, str]:
+    """Is the duckdb driver installed? Returns (yes/no, why not)."""
     try:
         import duckdb  # noqa: F401  - importing it *is* the probe
     except ImportError:  # pragma: no cover - depends on install extras
@@ -45,6 +51,7 @@ def _duckdb_available() -> tuple[bool, str]:
 
 @pytest.fixture(scope="session")
 def pg_url() -> str:
+    """The PostgreSQL endpoint, or skip the test if nothing is listening."""
     ok, why = _pg_available()
     if not ok:
         pytest.skip(why)
@@ -53,6 +60,7 @@ def pg_url() -> str:
 
 @pytest.fixture(scope="session")
 def duckdb_path(tmp_path_factory: pytest.TempPathFactory) -> str:
+    """A scratch path for a DuckDB file, unique to this test session."""
     ok, why = _duckdb_available()
     if not ok:
         pytest.skip(why)
@@ -72,8 +80,10 @@ def duckdb_write(path: str):
 
 
 def open_duckdb(path: str, side: str = "B", float_scale: int = 6):
+    """Open a read-only DuckDB dialect over an already-written file."""
     return get_dialect(f"duckdb:///{path}", side=side, float_scale=float_scale)
 
 
 def open_pg(url: str, side: str = "A", float_scale: int = 6):
+    """Open a read-only PostgreSQL dialect."""
     return get_dialect(url, side=side, float_scale=float_scale)

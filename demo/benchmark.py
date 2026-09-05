@@ -29,6 +29,11 @@ from parity.engine import diff
 
 
 def expected_planted(n: int) -> list[tuple[int, str]]:
+    """Exactly what generate.py --plant created, as (key, kind) pairs.
+
+    Asserted against rather than eyeballed - a benchmark that only measured
+    speed would happily report a fast wrong answer.
+    """
     keys = plant_keys(n)
     return sorted([
         (keys["null_trap"], "different"),      # NULL -> ''
@@ -40,6 +45,7 @@ def expected_planted(n: int) -> list[tuple[int, str]]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Time the diff and report what it cost, optionally checking the result."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pg", default=DEFAULT_PG)
     parser.add_argument("--duckdb", default=os.path.join(DATA_DIR, "new.duckdb"))

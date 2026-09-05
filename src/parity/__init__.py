@@ -19,6 +19,11 @@ __all__ = ["__version__", "diff", "get_dialect"]
 
 
 def __getattr__(name: str) -> Any:
+    """Resolve `parity.diff` and `parity.get_dialect` on first use.
+
+    Deferring the import is what keeps `import parity` free of database
+    drivers, so a DuckDB-only user is never made to install psycopg.
+    """
     # Lazy re-export: keeps `import parity` free of driver imports.
     if name == "get_dialect":
         from parity.dialects.base import get_dialect

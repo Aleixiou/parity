@@ -49,6 +49,7 @@ pg.commit()
 print(f"loaded {N:,} rows into both engines in {time.perf_counter()-t0:.1f}s")
 
 def run(label):
+    """Run one diff, print what it cost, and hand back the result."""
     a = get_dialect(PG); b = get_dialect(DUCK)
     r = diff(a, b, f"public.{TABLE}", f"main.{TABLE}", "id")
     s = r.stats

@@ -1,4 +1,8 @@
-"""DuckDB dialect."""
+"""DuckDB dialect.
+
+The other half of a comparison, and the shortest complete example of the
+`Dialect` contract - a good place to start when writing a new one.
+"""
 
 from __future__ import annotations
 
@@ -35,6 +39,13 @@ class DuckDBDialect(Dialect):
     default_schema = "main"
 
     def connect(self, connection_string: str) -> None:
+        """Open the database file read-only, pinned to UTC.
+
+        Read-only is enforced at the connection, so no bug in query building
+        can write to a user's data. An in-memory database is the exception:
+        it holds nothing to protect and read-only would make it permanently
+        empty.
+        """
         import duckdb
 
         path = duckdb_path(connection_string)
@@ -67,20 +78,34 @@ class DuckDBDialect(Dialect):
         self._conn.execute("set TimeZone='UTC'")
 
     def cancel(self) -> None:
+        """Abort the query currently running, from another thread."""
         self._conn.interrupt()
 
     def close(self) -> None:
+        """Close the connection and release the file."""
         self._conn.close()
 
     def query(self, sql: str) -> list[tuple[Any, ...]]:
+        """Run `sql` and return every row as a list of tuples."""
         return self._conn.execute(sql).fetchall()
 
     def quote(self, identifier: str) -> str:
+        """Wrap an identifier in double quotes, doubling any it contains.
+
+        This is the injection boundary: table and column names arrive from the
+        command line and reach SQL through here.
+        """
         return '"' + identifier.replace('"', '""') + '"'
 
     # ----------------------------------------------------------- rendering
 
     def normalize(self, column: Column) -> str:
+        """Render one column as canonical text, null-safe.
+
+        The contract: two rows are equal if and only if this text is
+        byte-identical to the other engine's. Every branch ends up inside the
+        `coalesce` at the bottom, so a NULL always becomes the sentinel.
+        """
         c = self.quote(column.name)
         t = column.logical_type
         if t is LogicalType.INTEGER:
@@ -115,18 +140,26 @@ class DuckDBDialect(Dialect):
         return f"coalesce({expr}, '{NULL_SENTINEL}')"
 
     def hash_expr(self, text_expr: str) -> str:
+        """Fold canonical text into a positive 60-bit integer.
+
+        Must produce the same number PostgreSQL does for the same input -
+        648541476951500027 for 'abc', which a test pins.
+        """
         return f"cast(('0x' || substr(md5({text_expr}), 1, {HASH_HEX_CHARS})) as bigint)"
 
     def int_div(self, numerator: str, denominator: str) -> str:
+        """Truncating integer division."""
         # `//` is DuckDB's truncating integer division. Plain `/` would promote
         # to DOUBLE and silently lose precision on large key ranges.
         return f"(({numerator}) // ({denominator}))"
 
     def wide_int(self, expr: str) -> str:
+        """Widen an integer past 64 bits, before any arithmetic touches it."""
         # hugeint is 128-bit, which the key offset cannot overflow.
         return f"cast(({expr}) as hugeint)"
 
     def sum_wide(self, expr: str) -> str:
+        """Sum row hashes without overflowing, and return 0 for an empty group."""
         # DECIMAL(38,0) holds sums far beyond any realistic row count * 2^60.
         return f"coalesce(sum(cast(({expr}) as decimal(38,0))), 0)"
 
