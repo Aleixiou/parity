@@ -459,6 +459,10 @@ def get_dialect(
         )
     try:
         dialect.connect(connection_string)
+    except ValueError:
+        # Already one of ours, and already says which side. Re-wrapping would
+        # print the prefix twice.
+        raise
     except Exception as exc:
         # A bare driver error says nothing about which of the two endpoints
         # failed, which is the first thing anyone needs to know.

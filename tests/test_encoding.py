@@ -1345,3 +1345,14 @@ def test_every_function_has_a_docstring():
     assert not undocumented, "functions with no docstring:\n  " + "\n  ".join(
         undocumented
     )
+
+
+@pytest.mark.duckdb
+def test_a_connection_error_names_the_side_exactly_once(tmp_path):
+    """`get_dialect` wraps driver errors to name the side - but the dialect may
+    already have done so, and wrapping again printed the prefix twice."""
+    with pytest.raises(ValueError) as exc:
+        get_dialect(f"duckdb:///{tmp_path / 'absent.duckdb'}", side="A")
+    message = str(exc.value)
+    assert message.count("side A") == 1, message
+    assert "not found" in message
