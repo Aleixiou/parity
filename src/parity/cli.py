@@ -283,7 +283,7 @@ def to_dict(result: DiffResult) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _run_diff(args: argparse.Namespace, out: TextIO, err: TextIO) -> int:
+def _run_diff(args: argparse.Namespace, out: TextIO) -> int:
     # Imported here, not at module scope, so `parity --help` works with no
     # database driver installed at all.
     from parity.dialects.base import get_dialect
@@ -338,7 +338,7 @@ def main(
         return EXIT_ERROR
 
     try:
-        return _run_diff(args, out, err)
+        return _run_diff(args, out)
     except KeyboardInterrupt:  # pragma: no cover
         print("parity: interrupted", file=err)
         return EXIT_ERROR

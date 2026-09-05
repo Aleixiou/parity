@@ -204,8 +204,6 @@ def test_the_checksum_does_not_overflow_on_a_full_table(pg, pg_tables, duck):
     sides would disagree on identical data. This is why both dialects aggregate
     in a wider type.
     """
-    from parity.types import Column, LogicalType
-
     cols = [c for c in duck.columns("main.orders") if c.name != "id"]
     a_sums = pg.segment_checksums(pg_tables["clean"], "id", cols, 1, N + 1, 1)
     b_sums = duck.segment_checksums("main.orders", "id", cols, 1, N + 1, 1)
