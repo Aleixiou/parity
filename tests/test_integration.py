@@ -464,3 +464,60 @@ def test_a_naive_timestamp_is_unaffected_by_the_utc_pin(pg, pg_tables, duck):
     carries no zone at all - the clean table is full of them."""
     result = diff(pg, duck, pg_tables["clean"], "main.orders", "id")
     assert result.identical
+
+
+# ---------------------------------------------------------------------------
+# Restricted accounts - what you actually point at a production warehouse
+# ---------------------------------------------------------------------------
+
+
+def test_a_table_that_exists_is_distinguished_from_one_that_does_not(pg, pg_tables):
+    """The catalog probe behind the permissions message.
+
+    `information_schema` is filtered to what the role holds privileges on, so a
+    missing GRANT arrives as the same empty result as a missing table. Telling
+    someone their table does not exist when it plainly does sends them hunting
+    for a typo instead of asking their DBA - and a restricted account is exactly
+    what anyone sane points at a production warehouse.
+
+    `pg_catalog` is world-readable, which is what makes the two cases separable.
+    """
+    schema, name = pg.split_table(pg_tables["clean"], "public")
+    assert pg._exists_but_unreadable(schema, name) is True
+    assert pg._exists_but_unreadable(schema, "definitely_not_here") is False
+    assert pg._exists_but_unreadable("no_such_schema", name) is False
+
+
+def test_the_permissions_message_replaces_the_not_found_one(pg, monkeypatch):
+    """Given the probe says the table is there, the wording has to change -
+    otherwise the diagnosis is computed and then thrown away."""
+    monkeypatch.setattr(type(pg), "_exists_but_unreadable", lambda *_: True)
+    with pytest.raises(ValueError) as exc:
+        pg.columns(f"{PG_SCHEMA}_it.pretend_unreadable")
+    message = str(exc.value)
+    assert "side A" in message
+    assert "cannot read it" in message and "SELECT" in message
+    assert "not found" not in message, (
+        f"a permissions problem must not be reported as absence: {message}"
+    )
+
+
+def test_a_genuinely_absent_table_still_says_not_found(pg):
+    """Negative control: the permissions message must not swallow the ordinary
+    case, or every typo becomes a wild goose chase after a GRANT."""
+    with pytest.raises(ValueError) as exc:
+        pg.columns(f"{PG_SCHEMA}_it.definitely_not_here")
+    message = str(exc.value)
+    assert "not found" in message
+    assert "cannot read it" not in message
+
+
+def test_a_connection_failure_names_the_side(duck_path):
+    """A bare driver error says nothing about which of the two endpoints
+    failed, which is the first thing anyone needs to know."""
+    from parity.dialects.base import get_dialect
+
+    with pytest.raises(ValueError) as exc:
+        get_dialect("postgres://nobody:nobody@127.0.0.1:59999/nope", side="B")
+    message = str(exc.value)
+    assert "side B" in message and "could not connect" in message

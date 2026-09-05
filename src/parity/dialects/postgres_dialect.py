@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from parity.dialects.base import HASH_HEX_CHARS, NULL_SENTINEL, Dialect
+from parity.dialects.base import (
+    HASH_HEX_CHARS,
+    NULL_SENTINEL,
+    Dialect,
+    sql_literal,
+)
 from parity.types import Column, LogicalType
 
 
@@ -58,6 +63,20 @@ class PostgresDialect(Dialect):
         with self._conn.cursor() as cur:
             cur.execute(sql)
             return cur.fetchall()
+
+    def _exists_but_unreadable(self, schema: str, name: str) -> bool:
+        # pg_catalog is world-readable, unlike information_schema, which is
+        # filtered to what the current role holds privileges on.
+        try:
+            rows = self.query(
+                "select 1 from pg_catalog.pg_class c "
+                "join pg_catalog.pg_namespace n on n.oid = c.relnamespace "
+                f"where n.nspname = {sql_literal(schema)} "
+                f"and c.relname = {sql_literal(name)} limit 1"
+            )
+        except Exception:  # noqa: BLE001 - diagnosing an error must never replace it
+            return False
+        return bool(rows)
 
     def quote(self, identifier: str) -> str:
         return '"' + identifier.replace('"', '""') + '"'

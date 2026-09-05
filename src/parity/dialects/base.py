@@ -128,6 +128,14 @@ class Dialect(ABC):
         server, so `--a-table Orders` against a table the server stored as
         `orders` is a very easy mistake with a very unhelpful default message.
         """
+        if self._exists_but_unreadable(schema, name):
+            return (
+                f"table {table} exists but this role cannot read it. "
+                f"`information_schema` only lists tables you hold privileges "
+                f"on, so a missing GRANT looks exactly like a missing table. "
+                f"Ask for SELECT on {schema}.{name}."
+            )
+
         message = f"table not found: {table} (looked in schema {schema!r})"
         try:
             near = self.query(
@@ -144,6 +152,17 @@ class Dialect(ABC):
                 f"{' or '.join(sorted(others))}?"
             )
         return message
+
+    def _exists_but_unreadable(self, schema: str, name: str) -> bool:
+        """Whether the table is really there and this role simply cannot see it.
+
+        Engines with a privilege model filter `information_schema` by what the
+        current role may access, so "not found" and "not granted" arrive as the
+        same empty result - and telling someone their table does not exist when
+        it does sends them hunting for a typo instead of asking for a GRANT.
+        Default False for engines with no privilege model.
+        """
+        return False
 
     @abstractmethod
     def quote(self, identifier: str) -> str: ...
@@ -414,7 +433,14 @@ def get_dialect(
             f"[side {side}] no dialect for scheme {scheme!r}. "
             f"Supported: duckdb, postgres."
         )
-    dialect.connect(connection_string)
+    try:
+        dialect.connect(connection_string)
+    except Exception as exc:
+        # A bare driver error says nothing about which of the two endpoints
+        # failed, which is the first thing anyone needs to know.
+        raise ValueError(
+            f"[side {side}: {dialect.name}] could not connect: {exc}"
+        ) from exc
     return dialect
 
 
