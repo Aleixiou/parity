@@ -1,6 +1,6 @@
 # parity
 
-[![tests](https://github.com/Aleixiou/parity/actions/workflows/tests.yml/badge.svg)](https://github.com/Aleixiou/parity/actions/workflows/tests.yml)
+[![tests](https://github.com/Aleixiou/parity-diff/actions/workflows/tests.yml/badge.svg)](https://github.com/Aleixiou/parity-diff/actions/workflows/tests.yml)
 
 **Prove two tables in two different database engines hold the same data —
 without moving the data out of either engine.**

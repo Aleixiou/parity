@@ -5,8 +5,12 @@ name: release
 # Uses PyPI Trusted Publishing, so no API token exists in this repo or in
 # GitHub secrets. Before the first release, create a pending publisher at
 #   https://pypi.org/manage/account/publishing/
-# for project `parity-diff`, owner `Aleixiou`, repo `parity`, workflow
+# for project `parity-diff`, owner `Aleixiou`, repo `parity-diff`, workflow
 # `release.yml`, environment `pypi`.
+#
+# All five must match exactly. The repository was renamed from `parity`
+# after v0.1.0, so a publisher created before that rename has to be edited
+# or the next release is rejected.
 
 on:
   push:

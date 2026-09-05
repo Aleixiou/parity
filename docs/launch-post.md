@@ -15,7 +15,7 @@ paid cloud product. What's left is an unmaintained fork, SQLMesh's `table_diff`
 (which means adopting SQLMesh), and pandas-scale tools that die on real
 warehouse volumes.
 
-So I built [`parity`](https://github.com/Aleixiou/parity): point it at a table
+So I built [`parity`](https://github.com/Aleixiou/parity-diff): point it at a table
 in each of two engines, and it tells you exactly which rows and columns differ —
 without moving the data out of either one.
 
