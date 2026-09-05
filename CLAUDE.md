@@ -1,8 +1,8 @@
 # CLAUDE.md — project context for `parity`
 
-> Read this file **and** `BUILD_SPEC.md` before writing any code.
+> Read this file **and** `ROADMAP.md` before writing any code.
 > This file is durable context: what the project is, what is already proven,
-> and the rules you must not break. `BUILD_SPEC.md` is the ordered build plan.
+> and the rules you must not break. `ROADMAP.md` is status and direction.
 
 ---
 
@@ -377,10 +377,10 @@ for anyone who genuinely wants every row and has the memory for it.
 
 ## 5. Architecture
 
-**A working reference implementation of Milestones 0–2 ships in this repo**
-(`src/parity/`, proven by `demo/proof.py`). It is real, tested code, not
-pseudocode — read it before rewriting anything. It has no CLI, no test suite,
-and no packaging yet; that is what `BUILD_SPEC.md` picks up.
+The whole tool ships in `src/parity/` — dialects, engine and CLI — with 290
+tests, `demo/proof.py` as the end-to-end proof, and `demo/benchmark.py` as the
+10M-row one. Read the code before rewriting any of it: several decisions below
+encode findings that were expensive to discover.
 
 ### Connection string grammar
 

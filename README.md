@@ -142,6 +142,62 @@ PostgreSQL and `main` on DuckDB.
       --key order_id --quiet
 ```
 
+## Using it from Python
+
+The CLI is a thin wrapper. `diff` returns the whole result, so you can act on
+it rather than parse output. Importing `parity` pulls in no database driver —
+they load when `get_dialect` needs one.
+
+```python
+from parity import diff, get_dialect
+
+a = get_dialect("duckdb:///old.duckdb", side="A")
+b = get_dialect("duckdb:///new.duckdb", side="B")
+try:
+    result = diff(a, b, "main.orders", "main.orders", key="id")
+finally:
+    a.close()
+    b.close()
+
+if result.identical:
+    print("the tables match")
+else:
+    for d in result.diffs:
+        print(d.kind, d.key, d.columns, d.values_a, d.values_b)
+
+print(f"{result.stats.rows_downloaded} rows crossed the network")
+print(f"truncated: {result.truncated}")
+```
+
+```
+different 2 ['status'] {'status': 'ok'} {'status': 'CHANGED'}
+2 rows crossed the network
+truncated: False
+```
+
+`diff` takes the same options as the CLI: `columns`, `exclude`,
+`bisection_factor`, `threshold`, `max_diffs`. Pass `max_diffs=None` to lift the
+10,000 default, and `float_scale` to `get_dialect` — both sides must agree or
+the comparison is refused before it runs.
+
+### What you get back
+
+`DiffResult` carries:
+
+| Attribute | |
+|---|---|
+| `identical` | `True` only if nothing differed **and** the whole key space was walked. False whenever `truncated` is set. |
+| `truncated` | The walk stopped early, so this is a partial answer. Never read a truncated result as "the rest matched". |
+| `diffs` | `RowDiff` objects in key order, each with `key`, `kind` (`only_in_a`, `only_in_b`, `different`), the `columns` that moved, and `values_a` / `values_b` as raw canonical text. |
+| `columns` | The columns actually compared, after `columns` and `exclude`. |
+| `warnings` | Everything the comparison decided on your behalf: columns skipped, types that differ between sides, timezone-awareness mismatches. Worth surfacing. |
+| `float_scale` | The rounding in force, so a caller can state it alongside the verdict. |
+| `stats` | `queries`, `rows_downloaded`, `rows_compared_a`, `rows_compared_b`, `segments_checked`, `seconds`. |
+
+`diff` raises `ValueError` for anything it refuses — a non-integer key, a
+non-unique or NULL key, a missing table, mismatched float scales. The message
+always names which side.
+
 ## Limitations — read these before trusting a result
 
 A parity tool that reports a false match is worse than useless, so these are
@@ -230,7 +286,7 @@ python demo/benchmark.py --expect-planted
 ```
 
 `CLAUDE.md` holds the verified cross-engine SQL and why each expression is the
-way it is. `BUILD_SPEC.md` is the build plan.
+way it is. `ROADMAP.md` is what is done and what comes next.
 
 ## Changelog
 

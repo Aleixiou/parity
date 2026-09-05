@@ -1,0 +1,101 @@
+# ROADMAP.md — where `parity` is, and where it goes next
+
+> `CLAUDE.md` holds the verified cross-engine SQL and the scope rules. This
+> file holds status and direction. If the two disagree, `CLAUDE.md` wins on
+> anything technical.
+
+This replaces the original ordered build plan, which described a project with
+no CLI, no tests and no packaging. All of that shipped, so the plan had become
+a document confidently describing a state the repo had left — worse than no
+document, because it makes a reader distrust the accurate ones.
+
+## Where it is
+
+**v0.1.0, released.** `pip install parity-diff`, MIT, PostgreSQL ↔ DuckDB.
+
+| | |
+|---|---|
+| Tests | 290, zero skipped against live PostgreSQL and DuckDB |
+| Coverage | 99%, with a 95% floor enforced in CI |
+| CI | ruff, `mypy --strict`, PostgreSQL 16 and 18, Python 3.10 and 3.13, Windows, a DuckDB-only install |
+| Proven | 10M rows per side: identical in 4 queries and 0 rows downloaded; five planted differences found exactly, moving 0.0381% of the data |
+
+Every test plants a difference and asserts the tool finds exactly it. That rule
+is the reason this project can be trusted at all, and it is not negotiable — see
+`CONTRIBUTING.md`.
+
+## What is not done
+
+Ordered by how much it would change who can use this.
+
+### 1. A warehouse dialect — the only thing that matters commercially
+
+PostgreSQL is OLTP and DuckDB is embedded. Neither is where migration budgets
+live. Snowflake, BigQuery, Databricks and Redshift are, and the tool currently
+cannot connect to any of them. Everything else on this list is secondary to
+this one.
+
+A dialect is roughly 70–85 lines. `CONTRIBUTING.md` has the contract and the
+six traps that will bite. It is not done until `tests/test_encoding.py` passes
+against the real engine — an unverified dialect on a tool whose whole claim is
+that it does not lie is worse than no dialect.
+
+### 2. Non-integer and composite keys
+
+The bisection arithmetic divides the key range, so it needs an integer. A
+`uuid` or a composite natural key is refused with a clear message rather than
+guessed at — but plenty of modern tables are keyed exactly that way, and they
+simply cannot be compared today.
+
+The intended route is to hash the key into an integer and keep the same
+bisection. That produces keys spread across the full bigint range, which is why
+the overflow work in `CLAUDE.md` §4.5 had to be finished before this is
+attempted.
+
+### 3. Sampling mode
+
+An approximate check that costs a fraction of a full hash pass, for the case
+where a fast signal beats a certain one. Must be labelled as approximate
+everywhere it appears — `CLAUDE.md` §8 forbids letting an approximate result
+look exact.
+
+### 4. A dbt integration
+
+`--select` a model and diff prod against the PR. Only worth building once
+someone with a dbt project asks for it.
+
+## Deliberately refused
+
+Not "later" — no. The open-source predecessor in this category was abandoned
+because maintaining it grew expensive, and a narrow scope is the only defence.
+
+- data quality rules, freshness checks, anomaly detection, observability
+- lineage, cataloguing, orchestration, transformation
+- a web UI, a server, a database of past runs
+- schema migration or DDL generation
+- anything that requires adopting a framework to use
+
+The test for any proposed feature: does it help someone answer *"can I safely
+switch off the old system?"* If not, it does not belong here.
+
+## Known limitations
+
+These are in the README too, because a user has to see them. Repeated here so a
+contributor knows which are deliberate and which are open.
+
+| Limitation | Status |
+|---|---|
+| Integer keys only | Open — see above |
+| Floats compared at 6 decimal places | Deliberate, configurable, printed on every run |
+| Keys must be unique and non-NULL | Deliberate — both are detected and refused |
+| At most 10,000 differences reported | Deliberate — unbounded needed 8.5 GB at 10M rows |
+| A double past 1e32 fails on DuckDB | Open, fails loudly |
+| Types beyond the seven mapped compare as raw text | Open, warned about |
+
+## How this project was built, if it is useful
+
+Milestones 0–5, one at a time, each with acceptance criteria that had to pass
+before the next began: repo skeleton, dialect layer and canonical encoding,
+bisection engine, CLI, the 10M-row proof, then release. The full history is in
+the git log, and `docs/launch-post.md` covers the ten bugs the discipline
+caught along the way.

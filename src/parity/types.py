@@ -1,6 +1,6 @@
 """Core value types shared across dialects and the diff engine.
 
-BUILD_SPEC sketched a ``TableRef`` and a ``Segment`` dataclass. Neither
+The original build plan sketched a ``TableRef`` and a ``Segment`` dataclass. Neither
 survived contact with the implementation: the engine takes a dialect, a
 table name and a key as separate arguments rather than bundling them, and a
 segment is a plain ``(lo, hi)`` tuple whose checksums live in the dict the
