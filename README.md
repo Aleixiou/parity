@@ -224,6 +224,10 @@ python demo/benchmark.py --expect-planted
 `CLAUDE.md` holds the verified cross-engine SQL and why each expression is the
 way it is. `BUILD_SPEC.md` is the build plan.
 
+## Changelog
+
+See `CHANGELOG.md`.
+
 ## License
 
 MIT — see `LICENSE`.
