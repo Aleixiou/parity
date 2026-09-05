@@ -572,3 +572,54 @@ def test_gather_returns_both_results_in_order():
         fb = pool.submit(lambda: "b")
         with pytest.raises(ValueError, match="side failed"):
             _gather(fa, fb)
+
+
+@pytest.mark.parametrize("threshold", [0, -1])
+def test_a_useless_threshold_is_refused(threshold: int):
+    a = FakeDialect(DictTable(COLS, {1: ("1", "a")}), side="A")
+    b = FakeDialect(DictTable(COLS, {1: ("1", "a")}), side="B")
+    with pytest.raises(ValueError, match="threshold"):
+        diff(a, b, "a.t", "b.t", "id", threshold=threshold)
+
+
+def test_exclude_naming_a_column_that_exists_nowhere_warns():
+    """A typo in --exclude silently comparing more than the user meant is the
+    kind of thing they should hear about, but it is not worth failing over."""
+    a_table = DictTable(COLS, {1: ("1.00", "paid")})
+    b_table = DictTable(COLS, {1: ("1.00", "paid")})
+    result, _, _ = run(a_table, b_table, exclude=["amount", "no_such_column"])
+
+    assert result.identical
+    assert any("no_such_column" in w and "neither side" in w for w in result.warnings)
+    # The real exclusion still took effect.
+    assert [c.name for c in result.columns] == ["status"]
+
+
+def test_max_diffs_also_stops_with_whole_segments_still_queued():
+    """Truncation has two shapes and both must be reported.
+
+    The limit can be hit part-way through one level's buckets, or between queue
+    pops with entire key ranges still unexamined. The second only happens with a
+    narrow fan-out and a low threshold, so the default-settings test never
+    reaches it - and an unexamined range that went unreported would be a partial
+    answer wearing a complete one's clothes.
+    """
+    changed = dict.fromkeys(range(1, 1001), ("0.00", "wrong"))
+    result, _, _ = run(
+        SyntheticTable(1_000),
+        SyntheticTable(1_000, changed=changed),
+        bisection_factor=2,
+        threshold=100,
+        max_diffs=5,
+    )
+
+    assert result.truncated
+    assert not result.identical
+    assert len(result.diffs) == 5
+    warning = next(w for w in result.warnings if "max-diffs" in w)
+    assert "partial answer" in warning
+    # The count has to include the ranges never opened, not just the extra rows
+    # from the bucket that tripped the limit.
+    assert "995" not in warning, (
+        "the unchecked count should exceed the trimmed diffs alone"
+    )

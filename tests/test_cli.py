@@ -459,3 +459,58 @@ def test_output_survives_a_legacy_codepage_stream():
     render_human(result, buffer)  # must not raise
     buffer.seek(0)
     assert "no differences" in buffer.buffer.getvalue().decode("cp1252")
+
+
+def test_unicode_glyphs_are_used_when_the_stream_can_encode_them():
+    """The ASCII fallback exists for legacy codepages; a UTF-8 stream should
+    get the nicer marks rather than being permanently downgraded."""
+    import io as _io
+
+    from parity.cli import render_human
+    from parity.types import Column, DiffResult, DiffStats, LogicalType
+
+    result = DiffResult(
+        diffs=[], stats=DiffStats(rows_compared_a=10, rows_compared_b=10),
+        columns=[Column("x", LogicalType.STRING, "varchar")],
+    )
+    buffer = _io.TextIOWrapper(_io.BytesIO(), encoding="utf-8", newline="")
+    render_human(result, buffer)
+    buffer.flush()
+    text = buffer.buffer.getvalue().decode("utf-8")
+    assert "✓" in text and "·" in text
+
+
+def test_long_values_stack_onto_separate_lines():
+    """Side-by-side is easier to scan, but only while the values fit. A long
+    value must not run off the edge of the terminal."""
+    import io as _io
+
+    from parity.cli import render_human
+    from parity.types import Column, DiffResult, DiffStats, LogicalType, RowDiff
+
+    long_a = "x" * 90
+    long_b = "y" * 90
+    result = DiffResult(
+        diffs=[RowDiff(1, "different", ["note"], {"note": long_a}, {"note": long_b})],
+        stats=DiffStats(rows_compared_a=1, rows_compared_b=1),
+        columns=[Column("note", LogicalType.STRING, "varchar")],
+    )
+    out = _io.StringIO()
+    render_human(result, out)
+    lines = out.getvalue().splitlines()
+
+    a_line = next(line for line in lines if long_a in line)
+    b_line = next(line for line in lines if long_b in line)
+    assert a_line is not b_line, "long values must not share a line"
+    assert long_b not in a_line
+
+    # ... whereas short ones still share a line.
+    short = DiffResult(
+        diffs=[RowDiff(1, "different", ["note"], {"note": "aa"}, {"note": "bb"})],
+        stats=DiffStats(rows_compared_a=1, rows_compared_b=1),
+        columns=[Column("note", LogicalType.STRING, "varchar")],
+    )
+    out = _io.StringIO()
+    render_human(short, out)
+    line = next(x for x in out.getvalue().splitlines() if "aa" in x)
+    assert "bb" in line

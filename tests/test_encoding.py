@@ -963,3 +963,87 @@ def test_an_absolute_path_opens(tmp_path):
         assert d.query("select count(*) from t")[0][0] == 0
     finally:
         d.close()
+
+
+# --------------------------------------------------------------------------
+# 8. The public surface, and the validation nobody reaches by accident
+# --------------------------------------------------------------------------
+
+
+def test_the_package_re_exports_lazily_without_importing_drivers():
+    """`import parity` must pull in no database driver.
+
+    A DuckDB-only user should never be made to install psycopg, and the lazy
+    `__getattr__` is what keeps that true. Nothing else in the suite touches
+    it, because the tests import from submodules directly.
+    """
+    import parity
+
+    assert parity.__version__
+    assert parity.get_dialect is get_dialect
+
+    from parity.engine import diff as engine_diff
+
+    assert parity.diff is engine_diff
+
+    with pytest.raises(AttributeError, match="no attribute"):
+        parity.does_not_exist  # noqa: B018 - the attribute access is the assertion
+
+
+@pytest.mark.parametrize("scale", [-1, -6])
+def test_a_negative_float_scale_is_refused(scale: int):
+    from parity.dialects.duckdb_dialect import DuckDBDialect
+
+    with pytest.raises(ValueError, match="float_scale must be >= 0"):
+        DuckDBDialect(float_scale=scale)
+
+
+def test_row_text_with_no_columns_is_valid_sql_on_both_dialects():
+    """Two tables sharing only their key still have to produce runnable SQL.
+
+    `concat_ws(chr(31), )` is a syntax error, so the empty case renders a
+    constant instead - and then only `count(*)` distinguishes the sides.
+    """
+    from parity.dialects.duckdb_dialect import DuckDBDialect
+    from parity.dialects.postgres_dialect import PostgresDialect
+
+    for dialect in (DuckDBDialect(), PostgresDialect()):
+        assert dialect.row_text([]) == "''"
+        assert "concat_ws" not in dialect.row_hash([])
+
+
+@pytest.mark.duckdb
+def test_the_empty_column_hash_actually_runs(tmp_path):
+    """Not just well-formed: the engine has to execute it."""
+    from parity.engine import diff
+
+    def make(path: str, rows: str) -> str:
+        con = duckdb_write(path)
+        con.execute("create table t (id bigint, only_here varchar)")
+        con.execute(f"insert into t values {rows}")
+        con.close()
+        return path
+
+    a = open_duckdb(make(str(tmp_path / "nc_a.duckdb"), "(1,'x'),(2,'y')"), side="A")
+    b = open_duckdb(make(str(tmp_path / "nc_b.duckdb"), "(1,'p')"), side="B")
+    try:
+        result = diff(a, b, "main.t", "main.t", "id", exclude=["only_here"])
+        assert [(d.key, d.kind) for d in result.diffs] == [(2, "only_in_a")]
+        assert any("no comparable columns" in w for w in result.warnings)
+    finally:
+        a.close()
+        b.close()
+
+
+@pytest.mark.duckdb
+def test_an_in_memory_dialect_works_and_is_not_read_only():
+    """`duckdb:///:memory:` holds no user data to protect, and a read-only
+    in-memory database would be empty by definition."""
+    d = get_dialect("duckdb:///:memory:", side="B")
+    try:
+        d.query("create table t (id bigint)")
+        d.query("insert into t values (1), (2)")
+        assert d.key_stats("main.t", "id").rows == 2
+        assert d.query("select current_setting('TimeZone')")[0][0] == "UTC"
+    finally:
+        d.close()

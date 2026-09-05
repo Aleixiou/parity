@@ -74,10 +74,14 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
 
-      - run: pip install -e ".[all]" pytest
+      - run: pip install -e ".[all]" pytest pytest-cov
 
       - name: run tests
-        run: pytest -v
+        # The coverage floor is a ratchet, not a target. It sits below the
+        # current figure so it catches a real regression without turning every
+        # defensive branch into a mock-shaped test. Only this job can reach it:
+        # the DuckDB-only job has no PostgreSQL and legitimately covers less.
+        run: pytest -v --cov=parity --cov-report=term-missing --cov-fail-under=95
 
       - name: the cross-engine tests must not have silently skipped
         # A green run that skipped every PostgreSQL test would prove nothing,

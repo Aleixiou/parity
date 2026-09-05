@@ -1,4 +1,13 @@
-"""Core value types shared across dialects and the diff engine."""
+"""Core value types shared across dialects and the diff engine.
+
+BUILD_SPEC sketched a ``TableRef`` and a ``Segment`` dataclass. Neither
+survived contact with the implementation: the engine takes a dialect, a
+table name and a key as separate arguments rather than bundling them, and a
+segment is a plain ``(lo, hi)`` tuple whose checksums live in the dict the
+dialect returns. They were carried unused for a while, which is worse than
+not having them - an unused public dataclass invites someone to build on it
+and then drift out of sync with what the code really does.
+"""
 
 from __future__ import annotations
 
@@ -30,19 +39,6 @@ class Column:
     name: str
     logical_type: LogicalType
     raw_type: str = ""
-
-
-@dataclass(frozen=True)
-class TableRef:
-    """A table on one side of a comparison."""
-
-    connection: str  # dialect-specific connection string
-    table: str  # optionally schema-qualified
-    key: str  # primary key column (integer for now)
-
-    @property
-    def dialect_name(self) -> str:
-        return self.connection.split(":", 1)[0]
 
 
 @dataclass(frozen=True)
@@ -84,26 +80,6 @@ class KeyStats:
         # exist. NULL keys are diagnosed separately.
         comparable = self.rows if self.non_null is None else self.non_null
         return comparable != self.distinct
-
-
-@dataclass
-class Segment:
-    """A half-open key range ``[lo, hi)`` and the checksum each side reports."""
-
-    lo: int
-    hi: int
-    count_a: int = 0
-    count_b: int = 0
-    checksum_a: int = 0
-    checksum_b: int = 0
-
-    @property
-    def matches(self) -> bool:
-        return self.count_a == self.count_b and self.checksum_a == self.checksum_b
-
-    @property
-    def max_rows(self) -> int:
-        return max(self.count_a, self.count_b)
 
 
 @dataclass
