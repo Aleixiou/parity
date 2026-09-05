@@ -3,7 +3,7 @@
 Notable changes, newest first. This project follows [semantic versioning](https://semver.org/),
 with the caveat that 0.x means the CLI surface may still move.
 
-## 0.1.0 — unreleased
+## 0.1.0 — 2026-09-05
 
 First release. Compares a table in PostgreSQL against a table in DuckDB and
 reports exactly which rows and columns differ, without moving the data out of
