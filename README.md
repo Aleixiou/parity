@@ -152,6 +152,8 @@ stated plainly rather than buried.
 - **`Infinity` and `NaN`** in float columns are compared as those literal
   tokens on both sides. A double whose magnitude reaches 1e32 is not supported
   and fails loudly on DuckDB.
+- **Wide tables are fine.** PostgreSQL caps a function call at 100 arguments,
+  so the row concatenation is built as a nested tree; tested to 500 columns.
 - **Supported types:** integer, decimal, float, boolean, string, date,
   timestamp. Anything else is compared as raw text and reported as a warning —
   two engines may render the same JSON or array differently for reasons that

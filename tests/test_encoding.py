@@ -1047,3 +1047,142 @@ def test_an_in_memory_dialect_works_and_is_not_read_only():
         assert d.query("select current_setting('TimeZone')")[0][0] == "UTC"
     finally:
         d.close()
+
+
+# --------------------------------------------------------------------------
+# 9. Wide tables - PostgreSQL caps a function call at 100 arguments
+# --------------------------------------------------------------------------
+
+
+def _wide_columns(n: int) -> list[Column]:
+    return [Column(f"c{i}", LogicalType.STRING, "varchar") for i in range(n)]
+
+
+def test_a_narrow_table_still_renders_exactly_one_flat_concat():
+    """The nesting must not disturb tables that never needed it, or every
+    existing checksum would move."""
+    from parity.dialects.base import MAX_CONCAT_ARGS
+    from parity.dialects.duckdb_dialect import DuckDBDialect
+
+    d = DuckDBDialect()
+    for n in (1, 2, 10, MAX_CONCAT_ARGS):
+        text = d.row_text(_wide_columns(n))
+        assert text.count("concat_ws") == 1, f"{n} columns should not nest"
+        expected = "concat_ws(chr(31), " + ", ".join(
+            d.normalize(c) for c in _wide_columns(n)
+        ) + ")"
+        assert text == expected
+
+
+def test_a_wide_table_nests_rather_than_exceeding_the_argument_limit():
+    from parity.dialects.base import MAX_CONCAT_ARGS
+    from parity.dialects.duckdb_dialect import DuckDBDialect
+    from parity.dialects.postgres_dialect import PostgresDialect
+
+    for dialect in (DuckDBDialect(), PostgresDialect()):
+        text = dialect.row_text(_wide_columns(500))
+        assert text.count("concat_ws") > 1, "500 columns must nest"
+        # No single call may carry more than the limit. Counting commas at the
+        # top level is fiddly; asserting the deepest call's arity is enough.
+        for call in text.split("concat_ws(chr(31), ")[1:]:
+            head = call.split("concat_ws")[0]
+            if "coalesce" in head:
+                assert head.count("coalesce(") <= MAX_CONCAT_ARGS
+
+
+@pytest.mark.duckdb
+def test_nesting_produces_byte_identical_text_to_a_flat_call(tmp_path):
+    """Nesting is exact, not an approximation.
+
+    Every argument is already coalesced and so never NULL, and `concat_ws`
+    skips only NULLs - so a tree of calls joins exactly the same values with
+    exactly the same separator as one flat call would.
+    """
+    from parity.dialects.duckdb_dialect import DuckDBDialect
+
+    d = DuckDBDialect()
+    values = [f"'v{i}'" for i in range(150)]
+    con = duckdb_write(str(tmp_path / "concat.duckdb"))
+    try:
+        nested = con.execute(f"select {d._concat(values)}").fetchone()[0]
+        flat = con.execute(
+            "select concat_ws(chr(31), " + ", ".join(values) + ")"
+        ).fetchone()[0]
+        assert nested == flat
+        assert nested.count("\x1f") == 149
+    finally:
+        con.close()
+
+
+@pytest.mark.postgres
+def test_a_table_wider_than_the_postgres_argument_limit_compares(pg, duck, pg_url, tmp_path):
+    """PostgreSQL's max_function_args is 100 and fixed at compile time, so a
+    flat concat over a 150-column table raised "cannot pass more than 100
+    arguments". DuckDB accepted the same table happily, making the failure
+    asymmetric - and denormalised fact tables are routinely this wide.
+    """
+    import psycopg
+
+    from parity.engine import diff
+
+    n = 150
+    cols_ddl = ", ".join(f"c{i} varchar" for i in range(n))
+    same = ", ".join(f"'v{i}'" for i in range(n))
+    changed = ", ".join(("'CHANGED'" if i == 99 else f"'v{i}'") for i in range(n))
+
+    duck_path = str(tmp_path / "wide.duckdb")
+    con = duckdb_write(duck_path)
+    con.execute(f"create table wide (id bigint, {cols_ddl})")
+    con.execute(f"insert into wide values (1, {same}), (2, {same})")
+    con.close()
+
+    table = f"{PG_SCHEMA}_wide.wide"
+    writer = psycopg.connect(pg_url, autocommit=True)
+    try:
+        writer.execute(f"drop schema if exists {PG_SCHEMA}_wide cascade")
+        writer.execute(f"create schema {PG_SCHEMA}_wide")
+        writer.execute(f"create table {table} (id bigint, {cols_ddl})")
+        writer.execute(f"insert into {table} values (1, {same}), (2, {changed})")
+    finally:
+        writer.close()
+
+    a = open_pg(pg_url, side="A")
+    b = open_duckdb(duck_path, side="B")
+    try:
+        result = diff(a, b, table, "main.wide", "id")
+        assert [(d.key, d.kind) for d in result.diffs] == [(2, "different")]
+        assert result.diffs[0].columns == ["c99"], (
+            "the one changed column out of 150 must be named exactly"
+        )
+    finally:
+        a.close()
+        b.close()
+
+
+@pytest.mark.duckdb
+def test_unicode_table_and_column_names_round_trip(tmp_path):
+    """Non-English identifiers are ordinary outside the anglosphere, and the
+    quoting path has to carry them through introspection, the checksum query
+    and the report without mangling."""
+    from parity.engine import diff
+
+    def make(path: str, value: str) -> str:
+        con = duckdb_write(path)
+        con.execute('create table "ünïcode" (id bigint, "日本語" varchar, "café" varchar)')
+        con.execute(f"insert into \"ünïcode\" values (1, 'あ', 'x'), (2, '{value}', 'y')")
+        con.close()
+        return path
+
+    a_path = make(str(tmp_path / "uni_a.duckdb"), "い")
+    b_path = make(str(tmp_path / "uni_b.duckdb"), "CHANGED")
+
+    a, b = open_duckdb(a_path, side="A"), open_duckdb(b_path, side="B")
+    try:
+        assert [c.name for c in a.columns("main.ünïcode")] == ["id", "日本語", "café"]
+        result = diff(a, b, "main.ünïcode", "main.ünïcode", "id")
+        assert [(d.key, d.kind) for d in result.diffs] == [(2, "different")]
+        assert result.diffs[0].columns == ["日本語"]
+        assert result.diffs[0].values_a == {"日本語": "い"}
+    finally:
+        a.close()
+        b.close()

@@ -197,6 +197,22 @@ case-insensitive follow-up query and names the near miss.
   38.4s, inside run-to-run noise — because the cost is dominated by MD5 over
   every row. One always-correct path is worth two percent in the one function
   whose off-by-one would make the walker skip rows and still report a match.
+- **`concat_ws` cannot take more than 99 columns on PostgreSQL.**
+  `max_function_args` is 100 and is fixed at compile time, so a flat
+  `concat_ws(sep, c1, ..., cN)` raises `cannot pass more than 100 arguments to
+  a function` the moment a table has that many comparable columns — which a
+  denormalised warehouse fact table routinely does. DuckDB accepted 150 without
+  complaint, so the failure was *asymmetric*: the same table worked on one side
+  and not the other. `row_text` therefore builds a **tree** of nested
+  `concat_ws` calls, at most `MAX_CONCAT_ARGS` (64) values each.
+
+  The nesting is **exact, not an approximation**. `concat_ws` joins its
+  arguments with the separator and skips only NULLs, and every argument has
+  already been through `coalesce`, so none is ever NULL. Therefore
+  `concat_ws(s, concat_ws(s, a, b), c)` is byte-identical to
+  `concat_ws(s, a, b, c)` — verified against both engines at 150 columns — and
+  a table narrow enough to fit in one call renders exactly the SQL it always
+  did, so no existing checksum moves.
 - `md5()` returns the identical lowercase hex digest in both engines.
 - `concat_ws`, `chr`, `coalesce`, `bit_xor` and ordered `string_agg` all exist
   in both, but prefer summing over XOR: **XOR silently cancels duplicate rows.**

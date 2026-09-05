@@ -33,6 +33,12 @@ NULL_SENTINEL = "\\N"
 # Number of MD5 hex characters folded into the row hash. 15 nibbles = 60 bits.
 HASH_HEX_CHARS = 15
 
+#: Most values a single `concat_ws` call may take. PostgreSQL's
+#: `max_function_args` is 100 and fixed at compile time; DuckDB allows more.
+#: 64 leaves clear headroom on the strictest engine and keeps both sides
+#: nesting identically, which is what guarantees identical canonical text.
+MAX_CONCAT_ARGS = 64
+
 #: Decimal places at which DECIMAL/FLOAT columns are compared. A deliberate,
 #: documented limitation - see CLAUDE.md section 4.2.
 DEFAULT_FLOAT_SCALE = 6
@@ -215,8 +221,32 @@ class Dialect(ABC):
             # `count(*)` in the same checksum query still catches rows present
             # on one side only, which is the only difference left to find.
             return "''"
-        parts = ", ".join(self.normalize(c) for c in columns)
-        return f"concat_ws({SEPARATOR_SQL}, {parts})"
+        return self._concat([self.normalize(c) for c in columns])
+
+    def _concat(self, parts: list[str]) -> str:
+        """Join rendered columns, nesting to stay under the argument limit.
+
+        PostgreSQL's `max_function_args` is 100 and is fixed at compile time,
+        so a flat `concat_ws(sep, c1, ..., cN)` raises "cannot pass more than
+        100 arguments to a function" the moment a table has ~99 comparable
+        columns - which a denormalised warehouse fact table routinely does.
+        DuckDB happily accepts 150, so the failure was asymmetric: the same
+        table worked on one side and not the other.
+
+        Nesting is **exact, not an approximation**. `concat_ws` joins its
+        arguments with the separator and skips only NULLs, and every argument
+        here has already been through `coalesce`, so none is ever NULL.
+        Therefore `concat_ws(s, concat_ws(s, a, b), c)` is byte-identical to
+        `concat_ws(s, a, b, c)`, and a table narrow enough to fit in one call
+        renders exactly the SQL it always did - no checksum moves.
+        """
+        if len(parts) <= MAX_CONCAT_ARGS:
+            return f"concat_ws({SEPARATOR_SQL}, {', '.join(parts)})"
+        groups = [
+            self._concat(parts[i : i + MAX_CONCAT_ARGS])
+            for i in range(0, len(parts), MAX_CONCAT_ARGS)
+        ]
+        return self._concat(groups)
 
     def row_hash(self, columns: Sequence[Column]) -> str:
         return self.hash_expr(self.row_text(columns))
