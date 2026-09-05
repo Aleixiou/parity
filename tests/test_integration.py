@@ -250,7 +250,12 @@ def test_the_key_range_is_walked_with_no_gaps(pg, pg_tables, duck, pg_url):
     # long-lived Dialect only ever sees the database as of its first query.
     fresh = open_pg(pg_url, side="A")
     try:
-        result = diff(fresh, duck, table, "main.orders", "id", threshold=100)
+        # max_diffs=None is the explicit opt-out from the default retention
+        # bound; this test is about the walk covering everything, so it has to
+        # actually keep everything.
+        result = diff(
+            fresh, duck, table, "main.orders", "id", threshold=100, max_diffs=None
+        )
     finally:
         fresh.close()
     # Side B has N rows, side A only 2000: 2000 changed plus the rest missing.

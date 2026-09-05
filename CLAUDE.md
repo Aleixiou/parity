@@ -357,6 +357,24 @@ Two consequences worth knowing:
   At tens of seconds that is the cost of any analytical query, and far cheaper
   than a verdict nobody can trust.
 
+### 4.10 Reported differences are bounded, because memory is
+
+A `RowDiff` costs roughly **715 bytes**, measured, and the count is linear.
+Two tables that share nothing therefore need about **8.5 GB at ten million
+rows** — an out-of-memory kill rather than an answer. This was found by
+accident: a benchmark run against a mismatched pair grew to 8 GB before it was
+stopped.
+
+Pointing the tool at the wrong table, the wrong schema or the wrong environment
+is precisely the situation a parity check exists to catch, so it has to survive
+doing so. `diff()` and the CLI therefore default `max_diffs` to
+**10,000** (`DEFAULT_MAX_DIFFS`), which is roughly 7 MB. Past it the walk stops,
+`truncated` is set, `identical` is never true, and the output reads "at least N
+differences — stopped early".
+
+`--max-diffs 0` on the CLI, or `max_diffs=None` in the library, lifts the limit
+for anyone who genuinely wants every row and has the memory for it.
+
 ## 5. Architecture
 
 **A working reference implementation of Milestones 0–2 ships in this repo**

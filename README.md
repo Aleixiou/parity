@@ -158,8 +158,12 @@ stated plainly rather than buried.
   timestamp. Anything else is compared as raw text and reported as a warning —
   two engines may render the same JSON or array differently for reasons that
   have nothing to do with the data.
-- **`--max-diffs` makes the result partial**, and says so: the run is flagged
-  `truncated`, and `identical` is never true. It does not mean the rest matched.
+- **At most 10,000 differences are reported by default.** Each one costs about
+  715 bytes, so two tables that share nothing would need gigabytes rather than
+  producing an answer - and pointing the tool at the wrong table or the wrong
+  environment is exactly what it exists to catch. Past the limit the run is
+  flagged `truncated`, `identical` is never true, and the output says "at
+  least N". It does not mean the rest matched. `--max-diffs 0` lifts the limit.
 - **Timezone-aware timestamps are compared as instants, in UTC.** Both
   sessions are pinned to UTC on connect, so the same instant matches whatever
   the two servers' default timezones are. Without that pin, two sides in

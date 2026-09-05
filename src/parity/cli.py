@@ -20,6 +20,7 @@ from typing import Any, TextIO
 
 from parity import __version__
 from parity.dialects.base import NULL_SENTINEL
+from parity.engine import DEFAULT_MAX_DIFFS
 from parity.types import DiffResult, RowDiff
 
 #: Exit codes. `1` means "differences found", not "crashed" - a CI job can tell
@@ -81,9 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
              "(default: 6). Both sides always use the same value.",
     )
     d.add_argument(
-        "--max-diffs", type=int, metavar="N",
-        help="stop after N differences. The result is then explicitly marked "
-             "partial - it does not mean the rest matched.",
+        "--max-diffs", type=int, default=DEFAULT_MAX_DIFFS, metavar="N",
+        help=f"stop after N differences (default: {DEFAULT_MAX_DIFFS:,}; 0 for "
+             f"no limit). The result is then explicitly marked partial - it "
+             f"does not mean the rest matched. The default exists because each "
+             f"difference costs memory, so two tables that share nothing would "
+             f"otherwise exhaust it rather than answering.",
     )
     d.add_argument("--json", action="store_true", help="machine-readable output")
     d.add_argument(
@@ -304,7 +308,8 @@ def _run_diff(args: argparse.Namespace, out: TextIO) -> int:
             exclude=_split(args.exclude),
             bisection_factor=args.bisection_factor,
             threshold=args.threshold,
-            max_diffs=args.max_diffs,
+            # 0 is the documented way to ask for no limit at all.
+            max_diffs=args.max_diffs or None,
         )
     finally:
         for side in (a, b):

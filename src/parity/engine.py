@@ -32,6 +32,14 @@ EMPTY = (0, 0)
 #: This is the common migration case and must not raise a warning.
 _NUMERIC_EQUIVALENT = frozenset({LogicalType.DECIMAL, LogicalType.FLOAT})
 
+#: Differences retained before the walk stops. Each `RowDiff` costs about
+#: 715 bytes, measured, and the count is linear - so an unbounded walk over
+#: two tables that share nothing needs 8.5 GB at ten million rows, which is
+#: an out-of-memory kill rather than an answer. Pointing the tool at the
+#: wrong table or the wrong environment is exactly the situation a parity
+#: check exists to catch, so it must survive it. Pass `None` for no limit.
+DEFAULT_MAX_DIFFS = 10_000
+
 _A = TypeVar("_A")
 _B = TypeVar("_B")
 
@@ -219,7 +227,7 @@ def diff(
     exclude: Sequence[str] = (),
     bisection_factor: int = 32,
     threshold: int = 10_000,
-    max_diffs: int | None = None,
+    max_diffs: int | None = DEFAULT_MAX_DIFFS,
 ) -> DiffResult:
     """Compare ``a_table`` on side ``a`` with ``b_table`` on side ``b``."""
     started = time.perf_counter()

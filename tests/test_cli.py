@@ -514,3 +514,45 @@ def test_long_values_stack_onto_separate_lines():
     render_human(short, out)
     line = next(x for x in out.getvalue().splitlines() if "aa" in x)
     assert "bb" in line
+
+
+def test_the_cli_default_caps_differences_and_says_so(base, tmp_path):
+    """Two tables that share nothing must produce an answer, not an OOM."""
+    from parity.engine import DEFAULT_MAX_DIFFS
+
+    path = str(tmp_path / "everything.duckdb")
+    con = duckdb_write(path)
+    con.execute(SCHEMA)
+    con.execute(ROWS.format(n=5_000))
+    con.execute("update orders set status = 'CHANGED', note = 'CHANGED'")
+    con.close()
+
+    # 5,000 differences is under the default, so this run is complete.
+    payload = json.loads(run_cli(*diff_args(base, path, "--json"))[1])
+    assert payload["truncated"] is False
+    assert payload["difference_count"] == 5_000
+
+    # Below the default, the cap engages and is reported honestly.
+    payload = json.loads(
+        run_cli(*diff_args(base, path, "--max-diffs", "100", "--json"))[1]
+    )
+    assert payload["truncated"] is True
+    assert payload["difference_count"] == 100
+    assert payload["identical"] is False
+
+    assert DEFAULT_MAX_DIFFS >= 5_000, "the default must not trip on ordinary runs"
+
+
+def test_max_diffs_zero_means_no_limit(base, tmp_path):
+    path = str(tmp_path / "nolimit.duckdb")
+    con = duckdb_write(path)
+    con.execute(SCHEMA)
+    con.execute(ROWS.format(n=5_000))
+    con.execute("update orders set status = 'CHANGED'")
+    con.close()
+
+    payload = json.loads(
+        run_cli(*diff_args(base, path, "--max-diffs", "0", "--json"))[1]
+    )
+    assert payload["difference_count"] == 5_000
+    assert payload["truncated"] is False

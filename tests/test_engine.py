@@ -697,3 +697,47 @@ def test_two_columns_of_the_same_awareness_are_not_flagged():
         cols = [Column("ts", LogicalType.TIMESTAMP, raw)]
         result, _, _ = run(DictTable(cols, {1: ("x",)}), DictTable(cols, {1: ("x",)}))
         assert not [w for w in result.warnings if "timezone" in w], raw
+
+
+def test_the_default_bounds_memory_when_the_tables_share_nothing():
+    """Pointing the tool at the wrong table is exactly what it exists to catch,
+    so it has to survive doing so.
+
+    Each RowDiff costs roughly 715 bytes, measured, and the count is linear -
+    an unbounded walk over ten million differing rows needs about 8.5 GB, which
+    is an out-of-memory kill rather than an answer.
+    """
+    from parity.engine import DEFAULT_MAX_DIFFS
+
+    n = DEFAULT_MAX_DIFFS * 2
+    result, _, _ = run(
+        SyntheticTable(n),
+        SyntheticTable(n, changed=dict.fromkeys(range(1, n + 1), ("0.00", "X"))),
+    )
+
+    assert len(result.diffs) == DEFAULT_MAX_DIFFS
+    assert result.truncated
+    assert not result.identical
+    assert any("partial answer" in w for w in result.warnings)
+
+
+def test_the_bound_can_be_lifted_explicitly():
+    """The default is a safety net, not a ceiling someone cannot get past."""
+    from parity.engine import DEFAULT_MAX_DIFFS
+
+    n = DEFAULT_MAX_DIFFS + 500
+    result, _, _ = run(
+        SyntheticTable(n),
+        SyntheticTable(n, changed=dict.fromkeys(range(1, n + 1), ("0.00", "X"))),
+        max_diffs=None,
+    )
+    assert len(result.diffs) == n
+    assert not result.truncated
+
+
+def test_a_normal_run_is_untouched_by_the_bound():
+    """The negative control: the overwhelming majority of real comparisons find
+    nothing or a handful, and must not be marked partial."""
+    result, _, _ = run(SyntheticTable(50_000), SyntheticTable(50_000, deleted=[7]))
+    assert not result.truncated
+    assert [(d.key, d.kind) for d in result.diffs] == [(7, "only_in_a")]
