@@ -1,8 +1,14 @@
 *.duckdb
 *.egg-info/
+*.env
+*.key
+*.pem
 *.pyc
 .coverage
+.env
 .idea/
+.my.cnf
+.mylogin.cnf
 .pytest_cache/
 .venv/
 __pycache__/
