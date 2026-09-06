@@ -79,7 +79,7 @@ jobs:
         run: |
           mkdir -p /tmp/sdist && tar -xzf dist/*.tar.gz -C /tmp/sdist
           cd /tmp/sdist/*/
-          python -m pip install --quiet -e ".[duckdb]" pytest
+          python -m pip install --quiet -e ".[duckdb,test]" pytest
           python -m pytest -q
 
       - uses: actions/upload-artifact@v5

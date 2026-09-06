@@ -89,7 +89,7 @@ jobs:
           python-version: ${{ matrix.python }}
           cache: pip
 
-      - run: pip install -e ".[all]" pytest pytest-cov
+      - run: pip install -e ".[all,test]" pytest pytest-cov
 
       - name: run tests
         # The coverage floor is a ratchet, not a target. It sits below the
@@ -124,7 +124,7 @@ jobs:
           python-version: "3.13"
           cache: pip
 
-      - run: pip install -e ".[duckdb]" pytest
+      - run: pip install -e ".[duckdb,test]" pytest
 
       - name: psycopg must not be installed
         run: |
@@ -146,5 +146,5 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-      - run: pip install -e ".[all]" pytest
+      - run: pip install -e ".[all,test]" pytest
       - run: pytest -v

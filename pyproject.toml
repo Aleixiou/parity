@@ -38,6 +38,9 @@ duckdb = ["duckdb>=1.0"]
 postgres = ["psycopg[binary]>=3.1"]
 mysql = ["mysql-connector-python>=8.0"]
 all = ["duckdb>=1.0", "psycopg[binary]>=3.1", "mysql-connector-python>=8.0"]
+# Test-only dependencies, kept out of every runtime extra. Hypothesis drives
+# the generative suite (tests/test_properties.py); the core stays stdlib-only.
+test = ["hypothesis>=6.0"]
 
 [project.urls]
 Homepage = "https://github.com/Aleixiou/parity-diff"

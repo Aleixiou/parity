@@ -15,6 +15,13 @@ engine never reaches past the dialect contract to build SQL itself.
 
 from __future__ import annotations
 
+import pytest
+
+# Hypothesis is a test-only dependency (the `test` extra). If it is somehow
+# absent, skip this whole module rather than fail collection - a missing test
+# dependency must not look like a broken build.
+pytest.importorskip("hypothesis")
+
 from fakes import DictTable, FakeDialect
 from hypothesis import given, settings
 from hypothesis import strategies as st
