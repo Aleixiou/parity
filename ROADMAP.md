@@ -11,8 +11,8 @@ document, because it makes a reader distrust the accurate ones.
 
 ## Where it is
 
-**v0.1.0 released**; since then, non-integer/composite keys and a MySQL
-dialect. `pip install parity-diff`, MIT. PostgreSQL, DuckDB, MySQL.
+**v0.2.0 released** (2026-09-06): PostgreSQL, DuckDB, MySQL, plus
+non-integer and composite keys. `pip install parity-diff`, MIT.
 
 | | |
 |---|---|
