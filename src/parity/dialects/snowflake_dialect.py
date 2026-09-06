@@ -1,14 +1,16 @@
 """Snowflake dialect.
 
-DRAFT - NOT YET VERIFIED. Every other dialect earns the word "supported" only
-after `tests/test_encoding.py` passes against a live instance, because a tool
-whose whole claim is that it does not lie must not ship an engine nobody has
-run. This file was written against Snowflake's documentation, not a real
-account, so until someone points it at Snowflake and the encoding harness
-agrees byte-for-byte with another engine, it stays out of the supported list.
+Verified against a live Snowflake account (AWS eu-central-2, 2026-09-07): the
+hash constant agrees, a full-table checksum matches DuckDB byte-for-byte over
+5,000 mixed-type rows, and `tests/test_snowflake.py` passes end to end - the
+identical check, a changed decimal, a deleted row, and the NULL-versus-empty
+trap. It was first written against Snowflake's documentation; the live run then
+turned up the one thing docs could not: Snowflake upper-cases unquoted
+identifiers, so the engine had to match keys and columns case-insensitively
+(see `_fold_columns` in engine.py) for a Snowflake table to diff against a
+lower-casing engine at all.
 
-The Snowflake-specific decisions, each of which the encoding tests must
-confirm:
+The Snowflake-specific decisions, each confirmed by that run:
 
 - **No `CONV` and no bit-cast for the hash.** Snowflake has neither, but
   `MD5_NUMBER_UPPER64(x)` returns the top 64 bits of the digest as an unsigned

@@ -124,7 +124,10 @@ def _diff(snowflake_url: str, duck_path: str, **kwargs):
     a = open_snowflake(snowflake_url, side="A")
     b = open_duckdb(duck_path, side="B")
     try:
-        return diff(a, b, "orders", "main.orders", "id", **kwargs)
+        # Side A names the table as Snowflake stored it (unquoted -> ORDERS);
+        # the key is given lower-case on purpose, to exercise the engine's
+        # case-insensitive key/column matching against Snowflake's ID/AMOUNT.
+        return diff(a, b, "ORDERS", "main.orders", "id", **kwargs)
     finally:
         a.close()
         b.close()
@@ -159,7 +162,8 @@ def test_a_changed_decimal_is_found_on_exactly_that_row(snowflake_url, duck_path
     _build_snowflake(snowflake_url, plant="changed")
     result = _diff(snowflake_url, duck_path)
     assert [(d.key, d.kind) for d in result.diffs] == [(1234, "different")]
-    assert result.diffs[0].columns == ["amount"]
+    # Columns are reported as side A (Snowflake) stores them - upper-cased.
+    assert result.diffs[0].columns == ["AMOUNT"]
 
 
 def test_a_deleted_row_is_reported_only_in_b(snowflake_url, duck_path):
@@ -174,4 +178,4 @@ def test_null_versus_empty_string_is_caught(snowflake_url, duck_path):
     _build_snowflake(snowflake_url, plant="null_trap")
     result = _diff(snowflake_url, duck_path)
     assert [(d.key, d.kind) for d in result.diffs] == [(13, "different")]
-    assert result.diffs[0].columns == ["note"]
+    assert result.diffs[0].columns == ["NOTE"]

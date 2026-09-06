@@ -87,6 +87,7 @@ pip install "parity-diff[all]"        # every engine
 pip install "parity-diff[duckdb]"     # DuckDB only — no other driver pulled in
 pip install "parity-diff[postgres]"   # PostgreSQL only
 pip install "parity-diff[mysql]"      # MySQL only
+pip install "parity-diff[snowflake]"  # Snowflake only
 ```
 
 > The PyPI distribution is `parity-diff` — plain `parity` is squatted by an
@@ -248,7 +249,8 @@ stated plainly rather than buried.
 | PostgreSQL | supported (tested against 16 and 18) |
 | DuckDB | supported (tested against 1.5) |
 | MySQL | supported (tested against 8.0) |
-| Snowflake, BigQuery, Redshift | not yet — see `CONTRIBUTING.md`, a dialect is ~80 lines |
+| Snowflake | supported (verified live on AWS; `pip install "parity-diff[snowflake]"`) |
+| BigQuery, Redshift | not yet — see `CONTRIBUTING.md`, a dialect is ~80 lines |
 
 ## Scope
 

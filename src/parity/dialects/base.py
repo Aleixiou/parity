@@ -552,16 +552,13 @@ def get_dialect(
 
         dialect = MySQLDialect(float_scale=float_scale, side=side)
     elif scheme in ("snowflake",):
-        # DRAFT dialect, unverified against a live instance - kept out of the
-        # "Supported" line until the encoding harness agrees with another
-        # engine on a real account (§8).
         from parity.dialects.snowflake_dialect import SnowflakeDialect
 
         dialect = SnowflakeDialect(float_scale=float_scale, side=side)
     else:
         raise ValueError(
             f"[side {side}] no dialect for scheme {scheme!r}. "
-            f"Supported: duckdb, postgres, mysql."
+            f"Supported: duckdb, postgres, mysql, snowflake."
         )
     try:
         dialect.connect(connection_string)

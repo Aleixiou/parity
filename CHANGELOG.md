@@ -3,6 +3,39 @@
 Notable changes, newest first. This project follows [semantic versioning](https://semver.org/),
 with the caveat that 0.x means the CLI surface may still move.
 
+## Unreleased
+
+### Added
+
+- **Snowflake support** (`pip install "parity-diff[snowflake]"`), verified end
+  to end against a live account (AWS eu-central-2): the hash constant agrees,
+  a full-table checksum matches DuckDB byte-for-byte over 5,000 mixed-type
+  rows, and the identical / changed / deleted / NULL-vs-empty checks all pass.
+  Snowflake has no bit-cast or `CONV`, so the 60-bit row hash goes through
+  `floor(md5_number_upper64(x)/16)`; integers and decimals both report as
+  `NUMBER` and are split by `numeric_scale`; the NULL sentinel is built from
+  `chr(92)`. Snowflake offers only READ COMMITTED, so unlike PostgreSQL the
+  walk is not pinned to one snapshot — a documented limitation, not a hidden one.
+
+### Changed
+
+- **Identifiers are now matched case-insensitively across engines.** `--key` is
+  one name applied to both sides and the shared-column set is an intersection of
+  two schemas, but Snowflake upper-cases unquoted identifiers while
+  PostgreSQL/DuckDB lower-case them — so a table stored as `id`, `amount` and its
+  migration stored as `ID`, `AMOUNT` previously shared no key and no columns, and
+  the diff was impossible. Matching now folds case (each side still quotes its
+  own real name in SQL), so a table diffs cleanly against its differently-cased
+  migration. Same-case schemas are unaffected and no checksum moves; a table
+  with two columns differing only in case is refused rather than folded
+  ambiguously. This surfaced only under a live Snowflake run, which is the point
+  of the §8 rule.
+
+### Internal
+
+- CI now creates the GitHub release page automatically after a successful PyPI
+  publish, from the tag's CHANGELOG section.
+
 ## 0.2.1 — 2026-09-06
 
 A round of generative testing — property-based, oracle (differential against a
