@@ -38,6 +38,10 @@ duckdb = ["duckdb>=1.0"]
 postgres = ["psycopg[binary]>=3.1"]
 mysql = ["mysql-connector-python>=8.0"]
 all = ["duckdb>=1.0", "psycopg[binary]>=3.1", "mysql-connector-python>=8.0"]
+# Draft, not yet in `all`: the Snowflake dialect is unverified against a live
+# instance, so it must not reach anyone who installs a supported extra (§8).
+# Kept installable on its own for the verification run.
+snowflake = ["snowflake-connector-python>=3.0"]
 # Test-only dependencies, kept out of every runtime extra. Hypothesis drives
 # the generative suite (tests/test_properties.py); the core stays stdlib-only.
 test = ["hypothesis>=6.0"]
@@ -64,6 +68,7 @@ markers = [
     "postgres: requires a reachable PostgreSQL server",
     "mysql: requires a reachable MySQL server",
     "duckdb: requires the duckdb driver",
+    "snowflake: requires a reachable Snowflake account (PARITY_TEST_SNOWFLAKE)",
 ]
 
 [tool.ruff]
@@ -105,6 +110,7 @@ ignore = [
 "src/parity/dialects/base.py" = ["S608"]
 "src/parity/dialects/postgres_dialect.py" = ["S608"]
 "src/parity/dialects/mysql_dialect.py" = ["S608"]
+"src/parity/dialects/snowflake_dialect.py" = ["S608"]
 # proof.py is kept close to the original author's script so it stays readable
 # next to the findings it produced; its terse one-line style is deliberate.
 "demo/proof.py" = ["E401", "E402", "E701", "E702", "B007", "S311", "S608"]

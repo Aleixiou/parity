@@ -67,6 +67,31 @@ def _mysql_available() -> tuple[bool, str]:
     return True, ""
 
 
+#: Snowflake, if one is configured. There is no local Snowflake and no free
+#: service container, so this is opt-in via an env var and skips otherwise -
+#: it never runs in CI, only when someone points it at a real account.
+SNOWFLAKE_URL = os.environ.get("PARITY_TEST_SNOWFLAKE", "")
+
+
+def _snowflake_available() -> tuple[bool, str]:
+    """Can we reach Snowflake? Returns (yes/no, why not).
+
+    Gated on the env var first so an unconfigured run skips instantly without
+    importing a driver or opening a network connection.
+    """
+    if not SNOWFLAKE_URL:
+        return False, "PARITY_TEST_SNOWFLAKE is not set"
+    try:
+        import snowflake.connector  # noqa: F401 - importing it is the probe
+    except ImportError:  # pragma: no cover - depends on install extras
+        return False, "snowflake-connector-python is not installed"
+    try:
+        get_dialect(SNOWFLAKE_URL, side="A").close()
+    except Exception as exc:  # pragma: no cover - depends on the account
+        return False, f"no Snowflake at the configured URL: {type(exc).__name__}"
+    return True, ""
+
+
 def _duckdb_available() -> tuple[bool, str]:
     """Is the duckdb driver installed? Returns (yes/no, why not)."""
     try:
@@ -92,6 +117,15 @@ def mysql_url() -> str:
     if not ok:
         pytest.skip(why)
     return MYSQL_URL
+
+
+@pytest.fixture(scope="session")
+def snowflake_url() -> str:
+    """The Snowflake endpoint, or skip if none is configured/reachable."""
+    ok, why = _snowflake_available()
+    if not ok:
+        pytest.skip(why)
+    return SNOWFLAKE_URL
 
 
 @pytest.fixture(scope="session")
@@ -127,4 +161,9 @@ def open_pg(url: str, side: str = "A", float_scale: int = 6):
 
 def open_mysql(url: str, side: str = "A", float_scale: int = 6):
     """Open a read-only, UTC-pinned MySQL dialect."""
+    return get_dialect(url, side=side, float_scale=float_scale)
+
+
+def open_snowflake(url: str, side: str = "A", float_scale: int = 6):
+    """Open a UTC-pinned Snowflake dialect (DRAFT - see snowflake_dialect.py)."""
     return get_dialect(url, side=side, float_scale=float_scale)
