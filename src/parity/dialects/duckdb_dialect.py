@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from parity.dialects.base import HASH_HEX_CHARS, NULL_SENTINEL, Dialect
+from parity.dialects.base import HASH_HEX_CHARS, Dialect
 from parity.types import Column, LogicalType
 
 
@@ -137,7 +137,7 @@ class DuckDBDialect(Dialect):
             expr = f"strftime({c}, '%Y-%m-%d %H:%M:%S.%f')"
         else:
             expr = f"cast({c} as varchar)"
-        return f"coalesce({expr}, '{NULL_SENTINEL}')"
+        return f"coalesce({expr}, {self.null_sentinel_sql()})"
 
     def hash_expr(self, text_expr: str) -> str:
         """Fold canonical text into a positive 60-bit integer.

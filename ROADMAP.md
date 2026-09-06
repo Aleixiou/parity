@@ -11,8 +11,8 @@ document, because it makes a reader distrust the accurate ones.
 
 ## Where it is
 
-**v0.1.0 released**, with non-integer and composite key support added since.
-`pip install parity-diff`, MIT, PostgreSQL ↔ DuckDB.
+**v0.1.0 released**; since then, non-integer/composite keys and a MySQL
+dialect. `pip install parity-diff`, MIT. PostgreSQL, DuckDB, MySQL.
 
 | | |
 |---|---|
@@ -31,10 +31,11 @@ Ordered by how much it would change who can use this.
 
 ### 1. A warehouse dialect — the only thing that matters commercially
 
-PostgreSQL is OLTP and DuckDB is embedded. Neither is where migration budgets
-live. Snowflake, BigQuery, Databricks and Redshift are, and the tool currently
-cannot connect to any of them. Everything else on this list is secondary to
-this one.
+PostgreSQL, DuckDB and MySQL are all OLTP or embedded. None is where migration
+budgets live. Snowflake, BigQuery, Databricks and Redshift are, and the tool
+cannot connect to any of them yet. MySQL (added after release) proved the
+dialect is ~80 lines and that a new engine needs no change to the core;
+repeating that against a warehouse is the highest-value work left.
 
 A dialect is roughly 70–85 lines. `CONTRIBUTING.md` has the contract and the
 six traps that will bite. It is not done until `tests/test_encoding.py` passes

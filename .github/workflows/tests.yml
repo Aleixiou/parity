@@ -36,7 +36,7 @@ jobs:
 
   # The full suite, both engines. PostgreSQL comes from a service container.
   cross-engine:
-    name: python ${{ matrix.python }} + postgres ${{ matrix.postgres }}
+    name: python ${{ matrix.python }} + postgres ${{ matrix.postgres }} + mysql
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -62,9 +62,24 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_USER: parity
+          MYSQL_PASSWORD: parity
+          MYSQL_DATABASE: parity_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uparity -pparity"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
 
     env:
       PARITY_TEST_PG: postgres://parity:parity@127.0.0.1:5432/parity
+      PARITY_TEST_MYSQL: mysql://parity:parity@127.0.0.1:3306/parity_test
 
     steps:
       - uses: actions/checkout@v5
@@ -84,10 +99,10 @@ jobs:
         run: pytest -v --cov=parity --cov-report=term-missing --cov-fail-under=95
 
       - name: the cross-engine tests must not have silently skipped
-        # A green run that skipped every PostgreSQL test would prove nothing,
-        # and that is exactly how a broken service container looks.
-        run: pytest tests/test_integration.py -q --no-header -p no:cacheprovider
-          | tee /tmp/out.txt
+        # A green run that skipped every PostgreSQL or MySQL test would prove
+        # nothing, and that is exactly how a broken service container looks.
+        run: pytest tests/test_integration.py tests/test_mysql.py -q --no-header
+          -p no:cacheprovider | tee /tmp/out.txt
           && ! grep -qi "skipped" /tmp/out.txt
 
       - name: end-to-end proof at 200k rows

@@ -68,8 +68,8 @@ jobs:
           /tmp/smoke/bin/pip install --quiet "$(ls dist/*.whl)[duckdb]"
           /tmp/smoke/bin/parity --version
           /tmp/smoke/bin/parity --help > /dev/null
-          if /tmp/smoke/bin/pip show psycopg > /dev/null 2>&1; then
-            echo "::error::the duckdb extra pulled in a PostgreSQL driver"; exit 1
+          if /tmp/smoke/bin/pip show psycopg mysql-connector-python > /dev/null 2>&1; then
+            echo "::error::the duckdb extra pulled in another engine's driver"; exit 1
           fi
 
       - name: the sdist must carry a suite that runs

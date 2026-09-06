@@ -43,7 +43,7 @@ That comes to roughly 70–85 lines. Read
 `src/parity/dialects/duckdb_dialect.py` first — it is the shortest complete
 example.
 
-### The six things that will bite you
+### The things that will bite you
 
 Each of these cost real time to discover. They are documented at length in
 `CLAUDE.md` §4; the short version:
@@ -82,6 +82,20 @@ Each of these cost real time to discover. They are documented at length in
    column's own type. Return something that survives 128 bits — `hugeint`,
    `numeric`, `NUMERIC(38,0)` — and check `int_div` still truncates on that
    type rather than producing a scaled or rounded result.
+
+MySQL, added after v0.1.0, turned up two more that a warehouse dialect may hit:
+
+7. **Not every engine has `chr`, and `char(n)` may be binary.** MySQL spells
+   the separator `char(31)`, not `chr(31)`, and a bare `char(31)` is a *binary*
+   string that coerces the whole `concat_ws` to bytes - which then comes back
+   from `fetch_range` as `bytes`, not `str`, and every row reads as different.
+   The separator and the NULL sentinel are dialect hooks (`separator_sql`,
+   `null_sentinel_sql`) for exactly this reason.
+
+8. **Backslash in a string literal is not portable.** MySQL processes a
+   backslash as an escape inside `'...'`, toggled by `sql_mode`, so the `\N`
+   sentinel silently became `N`. Build such bytes from `CHAR`/hex, not a
+   literal, and verify by hashing rather than by reading the SQL.
 
 ### Proving it works
 

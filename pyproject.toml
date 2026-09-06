@@ -3,7 +3,7 @@
 # PyPI by an empty project. The import name, the CLI command and the repo are
 # all still `parity`: `pip install parity-diff` gives you `parity ...`.
 name = "parity-diff"
-version = "0.1.0"
+version = "0.2.0"
 description = "Prove two tables in two different database engines hold the same data - without moving the data out of either engine."
 readme = "README.md"
 license = "MIT"
@@ -36,7 +36,8 @@ dependencies = []
 [project.optional-dependencies]
 duckdb = ["duckdb>=1.0"]
 postgres = ["psycopg[binary]>=3.1"]
-all = ["duckdb>=1.0", "psycopg[binary]>=3.1"]
+mysql = ["mysql-connector-python>=8.0"]
+all = ["duckdb>=1.0", "psycopg[binary]>=3.1", "mysql-connector-python>=8.0"]
 
 [project.urls]
 Homepage = "https://github.com/Aleixiou/parity-diff"
@@ -58,6 +59,7 @@ testpaths = ["tests"]
 addopts = "-q --strict-markers"
 markers = [
     "postgres: requires a reachable PostgreSQL server",
+    "mysql: requires a reachable MySQL server",
     "duckdb: requires the duckdb driver",
 ]
 
@@ -99,6 +101,7 @@ ignore = [
 # have their own injection tests in tests/test_encoding.py.
 "src/parity/dialects/base.py" = ["S608"]
 "src/parity/dialects/postgres_dialect.py" = ["S608"]
+"src/parity/dialects/mysql_dialect.py" = ["S608"]
 # proof.py is kept close to the original author's script so it stays readable
 # next to the findings it produced; its terse one-line style is deliberate.
 "demo/proof.py" = ["E401", "E402", "E701", "E702", "B007", "S311", "S608"]

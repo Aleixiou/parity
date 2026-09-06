@@ -3,6 +3,33 @@
 Notable changes, newest first. This project follows [semantic versioning](https://semver.org/),
 with the caveat that 0.x means the CLI surface may still move.
 
+## 0.2.0 — 2026-09-06
+
+Two additions that widen who the tool can serve, both proving the architecture
+holds: adding an engine and a key type each touched one place.
+
+### Added
+
+- **MySQL support** (`pip install "parity-diff[mysql]"`, tested against 8.0).
+  The first engine added after release, and the test of the "a dialect is ~80
+  lines" claim. It forced three MySQL-specific decisions the encoding tests
+  pin: the row hash goes through `CONV(hex,16,10)` rather than a bit-cast; the
+  field separator is `char(31 using utf8mb4)` because MySQL has no `chr` and a
+  bare `char` is binary; and the NULL sentinel is built from a hex literal
+  because MySQL processes backslash escapes in string literals. Verified
+  end to end against DuckDB, including the NULL-versus-empty-string trap.
+- **Non-integer and composite keys.** A single integer column is still
+  bisected directly and emits identical SQL to before. A uuid, a text key, or
+  several columns together are hashed to 60 bits for bucketing only — row
+  identity stays the real key, so a hash collision can never merge two rows.
+  `--key` takes a comma-separated list.
+
+### Verified engine agreement
+
+The hash constant `648541476951500027` for `'abc'` now agrees across three
+independent SQL paths — PostgreSQL's bit-cast, DuckDB's hex-cast, and MySQL's
+`CONV`.
+
 ## 0.1.0 — 2026-09-05
 
 First release. Compares a table in PostgreSQL against a table in DuckDB and
@@ -76,6 +103,6 @@ useless.
 
 ### Engines
 
-PostgreSQL (tested against 16 and 18) and DuckDB (tested against 1.5).
-Snowflake and BigQuery are not implemented; see `CONTRIBUTING.md` — a dialect
-is roughly 80 lines.
+PostgreSQL (16 and 18), DuckDB (1.5), and MySQL (8.0). Snowflake, BigQuery
+and Redshift are not implemented; see `CONTRIBUTING.md` — a dialect is roughly
+80 lines, and MySQL was the first one added after release to prove that.

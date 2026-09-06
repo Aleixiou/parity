@@ -22,6 +22,12 @@ PG_URL = os.environ.get(
 #: against a real database cannot collide with anything a user cares about.
 PG_SCHEMA = "parity_test"
 
+#: MySQL, if one is running. MySQL has no schema inside a database, so the
+#: `parity_test` database created by the setup grant is where fixtures live.
+MYSQL_URL = os.environ.get(
+    "PARITY_TEST_MYSQL", "mysql://parity:parity@127.0.0.1:3306/parity_test"
+)
+
 
 def _pg_available() -> tuple[bool, str]:
     """Can we reach PostgreSQL? Returns (yes/no, why not).
@@ -37,6 +43,27 @@ def _pg_available() -> tuple[bool, str]:
         psycopg.connect(PG_URL, connect_timeout=5).close()
     except Exception as exc:  # pragma: no cover - depends on local services
         return False, f"no PostgreSQL at {PG_URL}: {type(exc).__name__}"
+    return True, ""
+
+
+def _mysql_available() -> tuple[bool, str]:
+    """Can we reach MySQL? Returns (yes/no, why not)."""
+    try:
+        import mysql.connector
+    except ImportError:  # pragma: no cover - depends on install extras
+        return False, "mysql-connector-python is not installed"
+    try:
+        from urllib.parse import unquote, urlparse
+
+        u = urlparse(MYSQL_URL)
+        mysql.connector.connect(
+            host=u.hostname or "127.0.0.1", port=u.port or 3306,
+            user=unquote(u.username) if u.username else None,
+            password=unquote(u.password) if u.password else None,
+            database=u.path.lstrip("/") or None, connection_timeout=5,
+        ).close()
+    except Exception as exc:  # pragma: no cover - depends on local services
+        return False, f"no MySQL at {MYSQL_URL}: {type(exc).__name__}"
     return True, ""
 
 
@@ -56,6 +83,15 @@ def pg_url() -> str:
     if not ok:
         pytest.skip(why)
     return PG_URL
+
+
+@pytest.fixture(scope="session")
+def mysql_url() -> str:
+    """The MySQL endpoint, or skip the test if nothing is listening."""
+    ok, why = _mysql_available()
+    if not ok:
+        pytest.skip(why)
+    return MYSQL_URL
 
 
 @pytest.fixture(scope="session")
@@ -86,4 +122,9 @@ def open_duckdb(path: str, side: str = "B", float_scale: int = 6):
 
 def open_pg(url: str, side: str = "A", float_scale: int = 6):
     """Open a read-only PostgreSQL dialect."""
+    return get_dialect(url, side=side, float_scale=float_scale)
+
+
+def open_mysql(url: str, side: str = "A", float_scale: int = 6):
+    """Open a read-only, UTC-pinned MySQL dialect."""
     return get_dialect(url, side=side, float_scale=float_scale)

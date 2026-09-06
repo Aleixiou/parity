@@ -11,7 +11,6 @@ from typing import Any
 
 from parity.dialects.base import (
     HASH_HEX_CHARS,
-    NULL_SENTINEL,
     Dialect,
     sql_literal,
 )
@@ -150,7 +149,7 @@ class PostgresDialect(Dialect):
             expr = f"to_char({c}, 'YYYY-MM-DD HH24:MI:SS.US')"
         else:
             expr = f"({c})::text"
-        return f"coalesce({expr}, '{NULL_SENTINEL}')"
+        return f"coalesce({expr}, {self.null_sentinel_sql()})"
 
     def hash_expr(self, text_expr: str) -> str:
         """Fold canonical text into a positive 60-bit integer.

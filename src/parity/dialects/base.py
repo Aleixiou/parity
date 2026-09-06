@@ -27,7 +27,7 @@ from parity.types import Column, KeySpec, KeyStats, LogicalType
 # Field separator inside a row's canonical text. Unit Separator (0x1f) is
 # chosen because it effectively never appears in warehouse string data;
 # `chr(31)` is spelled the same way in every engine we support.
-SEPARATOR_SQL = "chr(31)"
+SEPARATOR_SQL = "chr(31)"  # default; a dialect overrides `separator_sql` if its spelling differs
 NULL_SENTINEL = "\\N"
 
 # Number of MD5 hex characters folded into the row hash. 15 nibbles = 60 bits.
@@ -244,6 +244,26 @@ class Dialect(ABC):
 
     # ------------------------------------------------------------ building
 
+    def separator_sql(self) -> str:
+        """SQL for the field separator, ASCII Unit Separator (0x1f).
+
+        `chr(31)` on PostgreSQL and DuckDB. MySQL spells it `char(31)`, and
+        must force a character result (`using utf8mb4`) or the join returns a
+        binary string, which would push the composite-key identity back to
+        bytes when fetched.
+        """
+        return SEPARATOR_SQL
+
+    def null_sentinel_sql(self) -> str:
+        r"""SQL producing the NULL sentinel as a string literal.
+
+        PostgreSQL and DuckDB take `\N` verbatim - neither processes
+        backslash escapes in a plain string literal. MySQL does, and its
+        setting is toggled by `sql_mode`, so a literal there is doubly unsafe;
+        it overrides this to build the two bytes from `CHAR(92)` instead.
+        """
+        return f"'{NULL_SENTINEL}'"
+
     def row_text(self, columns: Sequence[Column]) -> str:
         """Join every column's canonical text into one string per row.
 
@@ -279,7 +299,7 @@ class Dialect(ABC):
         renders exactly the SQL it always did - no checksum moves.
         """
         if len(parts) <= MAX_CONCAT_ARGS:
-            return f"concat_ws({SEPARATOR_SQL}, {', '.join(parts)})"
+            return f"concat_ws({self.separator_sql()}, {', '.join(parts)})"
         groups = [
             self._concat(parts[i : i + MAX_CONCAT_ARGS])
             for i in range(0, len(parts), MAX_CONCAT_ARGS)
@@ -512,10 +532,14 @@ def get_dialect(
         from parity.dialects.postgres_dialect import PostgresDialect
 
         dialect = PostgresDialect(float_scale=float_scale, side=side)
+    elif scheme in ("mysql",):
+        from parity.dialects.mysql_dialect import MySQLDialect
+
+        dialect = MySQLDialect(float_scale=float_scale, side=side)
     else:
         raise ValueError(
             f"[side {side}] no dialect for scheme {scheme!r}. "
-            f"Supported: duckdb, postgres."
+            f"Supported: duckdb, postgres, mysql."
         )
     try:
         dialect.connect(connection_string)
