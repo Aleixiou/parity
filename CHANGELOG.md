@@ -3,6 +3,50 @@
 Notable changes, newest first. This project follows [semantic versioning](https://semver.org/),
 with the caveat that 0.x means the CLI surface may still move.
 
+## 0.2.1 — 2026-09-06
+
+A round of generative testing — property-based, oracle (differential against a
+brute-force reference), metamorphic, and cross-engine fuzzing — added to make
+sure the tool actually does what it claims. It immediately earned its place by
+turning up a real correctness bug, now fixed.
+
+### Fixed
+
+- **A same-content insert and delete in one bucket could read as identical —
+  the cardinal sin for a diff tool.** Each bucket was summarised by its row
+  count plus a checksum over the *comparable columns only*. When one row was
+  added and another removed inside the same bucket and the two shared identical
+  column values — utterly ordinary data: a repeated status, a boolean, an empty
+  string — the counts balanced and the content sums matched, so the bucket read
+  clean and both differing rows were missed. The per-bucket checksum now folds
+  the **key** into every row's hash, so an inserted key and a deleted key hash
+  differently and the bucket can no longer cancel. This only ever adds
+  sensitivity: a checksum that differs is always re-checked by downloading and
+  comparing the real rows, so the change can cost an extra query but never a
+  wrong verdict. The oracle test — which compares the segmented walk against a
+  brute-force row-by-row diff over thousands of generated tables — found it and
+  now guards against its return.
+- **Single-row (and other degenerate one-key) tables downloaded their rows
+  instead of checksumming first.** An identical one-row table reported itself
+  identical but still moved its rows across the network, breaking the "identical
+  tables download zero rows" promise for that case. Such a table is now
+  checksum-qualified like any other, so an identical one downloads nothing; the
+  four-query cost on identical tables is unchanged.
+
+### Added
+
+- **Generative test suite** (`tests/test_properties.py`): an oracle test
+  (~400 random table pairs per run checked against a brute-force diff), tuning-
+  knob invariance, side-swap symmetry, an exact-change-count property, and
+  bucket-tiling properties — ~2,600 generated cases per run across ten
+  properties, all against the in-memory dialect so they run with no database.
+- **Cross-engine encoding fuzzer** (`tests/test_fuzz_encoding.py`): ~250
+  generated values plus hand-picked hostile ones (the field-separator byte, the
+  `\N` sentinel spelled as real data, emoji, combining marks, RTL controls,
+  bigint extremes, microsecond timestamps) inserted identically into PostgreSQL
+  and DuckDB, asserting byte-identical canonical text and matching 60-bit row
+  hashes, plus the whole `diff()` walk over that fuzzed data end to end.
+
 ## 0.2.0 — 2026-09-06
 
 Two additions that widen who the tool can serve, both proving the architecture

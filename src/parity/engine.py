@@ -411,10 +411,26 @@ def diff(
                 stats.segments_checked += 1
 
                 if span <= 1:
-                    _compare_rows(
-                        pool, a, b, a_table, b_table, key_a, key_b,
-                        a_cols, b_cols, s_lo, s_hi, diffs, stats,
+                    # Only the *initial* range is ever this small: queued
+                    # sub-ranges always have span > 1 (a single-key bucket is
+                    # downloaded straight from the loop below, never re-queued).
+                    # So this is a one-key table, and it must still be checksum-
+                    # qualified rather than downloaded outright, or an identical
+                    # one-row table moves rows and breaks the zero-download
+                    # promise every other identical table keeps.
+                    fa = pool.submit(
+                        a.segment_checksums, a_table, key_a, a_cols, s_lo, s_hi, 1
                     )
+                    fb = pool.submit(
+                        b.segment_checksums, b_table, key_b, b_cols, s_lo, s_hi, 1
+                    )
+                    cs_a, cs_b = _gather(fa, fb)
+                    stats.queries += 2
+                    if cs_a.get(0, EMPTY) != cs_b.get(0, EMPTY):
+                        _compare_rows(
+                            pool, a, b, a_table, b_table, key_a, key_b,
+                            a_cols, b_cols, s_lo, s_hi, diffs, stats,
+                        )
                     continue
 
                 n = min(bisection_factor, span)

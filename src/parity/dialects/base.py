@@ -275,9 +275,10 @@ class Dialect(ABC):
             # Two tables can legitimately share only their key - after
             # `--columns`/`--exclude`, or when the schemas have diverged
             # entirely. `concat_ws(chr(31), )` is a syntax error, so render a
-            # constant instead. Row *contents* then always match, while
-            # `count(*)` in the same checksum query still catches rows present
-            # on one side only, which is the only difference left to find.
+            # constant instead. The checksum query never passes an empty column
+            # set here: `segment_checksums` always folds the key in, so in that
+            # mode the key itself is what gets hashed. This branch stays as a
+            # defensive fallback for any other caller.
             return "''"
         return self._concat([self.normalize(c) for c in columns])
 
@@ -459,9 +460,23 @@ class Dialect(ABC):
         # the one function whose off-by-one would make the walker skip rows.
         offset = f"({self.wide_int(k)} - ({lo}))"
         bucket = self.int_div(f"{offset} * {n_segments}", f"({hi - lo})")
+        # Fold the *key* into every row's hash, not just the comparable columns.
+        # A count plus a content-only sum cannot see a same-content insert and
+        # delete in one bucket: the counts balance (one in, one out) and equal
+        # content sums to the same value, so the bucket reads clean - a false
+        # "identical", on data as ordinary as two rows sharing a status or an
+        # empty string. Including the key makes an inserted key and a deleted
+        # key hash to different values, so the bucket sum changes and the walker
+        # recurses in. This only ever *adds* sensitivity: a checksum that
+        # differs is always re-checked by downloading and comparing the real
+        # rows, so an incidental mismatch costs a query, never a wrong verdict.
+        # It also subsumes the no-comparable-columns mode, where the key becomes
+        # the only thing hashed. `columns` never contains the key, so the key is
+        # hashed exactly once.
+        content = self.row_hash([*key.columns, *columns])
         return (
             f"select {bucket} as seg, count(*), "
-            f"{self.sum_wide(self.row_hash(columns))} "
+            f"{self.sum_wide(content)} "
             f"from {self.qualify(table)} "
             f"where {k} >= {lo} and {k} <= {hi - 1} "
             f"group by 1"

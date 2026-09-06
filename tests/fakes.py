@@ -255,7 +255,13 @@ class FakeDialect(Dialect):
             bucket = ((k - lo) * n_segments) // span
             acc = out.setdefault(bucket, [0, 0])
             acc[0] += 1
-            acc[1] += row_hash(self.table.text(k, columns))
+            # Mirror Dialect._segment_sql: fold the key into the hash so a
+            # same-content insert and delete in one bucket cannot cancel. The
+            # integer key's canonical text is str(k), and row_text prepends it
+            # to the column text with the field separator.
+            col_text = self.table.text(k, columns)
+            combined = str(k) if not columns else f"{k}\x1f{col_text}"
+            acc[1] += row_hash(combined)
         return {i: (c, s) for i, (c, s) in out.items()}
 
     def fetch_range(
