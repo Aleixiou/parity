@@ -102,6 +102,7 @@ ignore = [
 "src/parity/dialects/base.py" = ["S608"]
 "src/parity/dialects/postgres_dialect.py" = ["S608"]
 "src/parity/dialects/mysql_dialect.py" = ["S608"]
+"src/parity/dialects/snowflake_dialect.py" = ["S608"]
 # proof.py is kept close to the original author's script so it stays readable
 # next to the findings it produced; its terse one-line style is deliberate.
 "demo/proof.py" = ["E401", "E402", "E701", "E702", "B007", "S311", "S608"]
