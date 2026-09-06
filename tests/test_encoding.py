@@ -1377,3 +1377,97 @@ def test_a_connection_error_names_the_side_exactly_once(tmp_path):
     message = str(exc.value)
     assert message.count("side A") == 1, message
     assert "not found" in message
+
+
+# --------------------------------------------------------------------------
+# 10. "Same information, stored differently" - the value-equality contract
+#
+# A migration (MySQL -> PostgreSQL, say) can re-store the same information a
+# different way. parity compares the *canonical text* of each value: it
+# normalises a documented set of representation differences and flags
+# everything else. This table makes that contract explicit and is the
+# regression guard on it - if `normalize()` ever changes what it absorbs, a
+# row here flips and the test fails.
+#
+# `same=True`  -> a representation difference the tool deliberately absorbs.
+# `same=False` -> a byte-level difference the tool reports, leaving the
+#                 "is this intended?" judgement to the user (via --exclude).
+# --------------------------------------------------------------------------
+
+_INT, _DEC, _FLT, _STR, _BOOL = (
+    LogicalType.INTEGER, LogicalType.DECIMAL, LogicalType.FLOAT,
+    LogicalType.STRING, LogicalType.BOOLEAN,
+)
+
+REPR_CASES = [
+    # label, (ddl_a, value_a, logical_a), (ddl_b, value_b, logical_b), same
+    ("integer width", ("integer", "42", _INT), ("bigint", "42", _INT), True),
+    ("decimal scale", ("decimal(12,2)", "1.50", _DEC), ("decimal(20,4)", "1.5", _DEC), True),
+    ("decimal vs double", ("decimal(12,2)", "1.50", _DEC), ("double", "1.5", _FLT), True),
+    ("negative decimal padding", ("decimal(6,3)", "-0.1", _DEC), ("double", "-0.1", _FLT), True),
+    # Absorbed *and dangerous*: a genuine difference below the 6-place float
+    # scale is invisible. Documented in CLAUDE.md 4.2; --float-scale exposes it.
+    ("difference below float scale", ("decimal(20,10)", "1.0000000100", _DEC),
+                                      ("decimal(20,10)", "1.0000000200", _DEC), True),
+
+    # Flagged: byte-level value differences, even when a human might call the
+    # information "the same".
+    ("boolean vs integer flag", ("boolean", "true", _BOOL), ("integer", "1", _INT), False),
+    ("difference within float scale", ("decimal(20,10)", "1.0000010000", _DEC),
+                                       ("decimal(20,10)", "1.0000020000", _DEC), False),
+    ("trailing whitespace", ("varchar", "'hi '", _STR), ("varchar", "'hi'", _STR), False),
+    ("case fold", ("varchar", "'YES'", _STR), ("varchar", "'yes'", _STR), False),
+    ("json key order", ("varchar", "'{\"a\":1,\"b\":2}'", _STR),
+                        ("varchar", "'{\"b\":2,\"a\":1}'", _STR), False),
+    ("null vs empty string", ("varchar", "NULL", _STR), ("varchar", "''", _STR), False),
+]
+
+
+@pytest.mark.duckdb
+@pytest.mark.parametrize(
+    "label,a,b,same", REPR_CASES, ids=[c[0].replace(" ", "-") for c in REPR_CASES]
+)
+def test_representation_change_is_absorbed_or_flagged_per_contract(
+    tmp_path, label, a, b, same
+):
+    """Two storings of a value agree in canonical text iff the contract says so.
+
+    Rendered through the real dialect, so this is exactly the text the diff
+    would hash and compare - not a stand-in.
+    """
+    ddl_a, val_a, log_a = a
+    ddl_b, val_b, log_b = b
+
+    path = str(tmp_path / f"repr_{abs(hash(label))}.duckdb")
+    con = duckdb_write(path)
+    try:
+        con.execute(f"create table a (v {ddl_a})")
+        con.execute(f"insert into a values ({val_a})")
+        con.execute(f"create table b (v {ddl_b})")
+        con.execute(f"insert into b values ({val_b})")
+    finally:
+        con.close()
+
+    d = open_duckdb(path, side="A")
+    try:
+        text_a = d.query(f"select {d.normalize(Column('v', log_a, ddl_a))} from a")[0][0]
+        text_b = d.query(f"select {d.normalize(Column('v', log_b, ddl_b))} from b")[0][0]
+    finally:
+        d.close()
+
+    verdict = text_a == text_b
+    assert verdict is same, (
+        f"{label}: canonical text {text_a!r} vs {text_b!r} -> "
+        f"{'SAME' if verdict else 'DIFFERENT'}, contract expected "
+        f"{'SAME' if same else 'DIFFERENT'}"
+    )
+
+
+@pytest.mark.duckdb
+def test_representation_table_covers_both_verdicts():
+    """Guard the guard: the table is only meaningful if it has cases of each
+    kind. A future edit that accidentally deleted every `False` row would leave
+    a test that proves the tool absorbs everything, which is the opposite of
+    what it must do."""
+    verdicts = {same for _, _, _, same in REPR_CASES}
+    assert verdicts == {True, False}, "the contract table needs both same and different cases"
