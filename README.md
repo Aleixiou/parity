@@ -296,7 +296,10 @@ way it is. `ROADMAP.md` is what is done and what comes next.
 
 ## Changelog
 
-See `CHANGELOG.md`.
+Latest release **0.2.1** — a generative test suite (property-based, oracle, and
+cross-engine fuzzing) and the correctness fix it surfaced: a same-content
+insert-plus-delete falling in one bucket that could previously read as
+identical. See `CHANGELOG.md` for the full history.
 
 ## License
 

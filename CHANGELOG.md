@@ -46,6 +46,10 @@ turning up a real correctness bug, now fixed.
   bigint extremes, microsecond timestamps) inserted identically into PostgreSQL
   and DuckDB, asserting byte-identical canonical text and matching 60-bit row
   hashes, plus the whole `diff()` walk over that fuzzed data end to end.
+- A `test` optional-dependency (`pip install "parity-diff[test]"`) carrying
+  Hypothesis, so the generative suite runs in CI on every push. The runtime
+  core stays standard-library only — this extra is never pulled in by an engine
+  extra.
 
 ## 0.2.0 — 2026-09-06
 
