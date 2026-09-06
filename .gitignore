@@ -15,5 +15,6 @@ __pycache__/
 build/
 demo/data/
 dist/
+docs/outreach.md
 e2e.duckdb
 htmlcov/
