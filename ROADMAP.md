@@ -16,9 +16,9 @@ dialect. `pip install parity-diff`, MIT. PostgreSQL, DuckDB, MySQL.
 
 | | |
 |---|---|
-| Tests | 293, zero skipped against live PostgreSQL and DuckDB |
+| Tests | 312, zero skipped against live PostgreSQL, DuckDB and MySQL |
 | Coverage | 99%, with a 95% floor enforced in CI |
-| CI | ruff, `mypy --strict`, PostgreSQL 16 and 18, Python 3.10 and 3.13, Windows, a DuckDB-only install |
+| CI | ruff, `mypy --strict`, PostgreSQL 16 and 18 + MySQL 8 service containers, Python 3.10 and 3.13, Windows, a DuckDB-only install |
 | Proven | 10M rows per side: identical in 4 queries and 0 rows downloaded; five planted differences found exactly, moving 0.0381% of the data |
 
 Every test plants a difference and asserts the tool finds exactly it. That rule

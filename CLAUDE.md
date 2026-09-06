@@ -69,14 +69,17 @@ Do not change any expression below without re-running the verification harness
 ### 4.1 The row hash
 
 The foundation of the whole tool: fold canonical row text into an integer that
-**both engines compute identically**.
+**every engine computes identically**.
 
 | Engine | Expression |
 |---|---|
 | PostgreSQL | `('x' \|\| substr(md5(<text>), 1, 15))::bit(60)::bigint` |
 | DuckDB | `cast(('0x' \|\| substr(md5(<text>), 1, 15)) as bigint)` |
+| MySQL | `cast(conv(substr(md5(<text>), 1, 15), 16, 10) as unsigned)` |
 
-Both return `648541476951500027` for input `'abc'`.
+All three return `648541476951500027` for input `'abc'` - through three
+different casts (bit-cast, hex-cast, CONV), which is exactly why a test pins
+the constant on each.
 
 **Why 15 hex characters (60 bits) and not 16.** 60 bits is the widest MD5 prefix
 that both engines render as the same *positive* signed 64-bit integer. At 16
