@@ -132,6 +132,34 @@ def _key_order(key: int | str) -> tuple[int, int | str]:
     return (1, key) if isinstance(key, str) else (0, key)
 
 
+def _fold_columns(
+    columns: list[Column], side: str, table: str
+) -> dict[str, Column]:
+    """Index a side's columns by case-folded name, for cross-engine matching.
+
+    Two engines fold unquoted identifiers to different cases, so a column is
+    the same column on both sides when its *folded* name matches. Each side
+    still holds its own `Column`, whose real stored name is what gets quoted
+    into SQL - only the matching is case-insensitive, never the rendering.
+
+    A table with two columns that differ only in case (possible only through
+    quoted identifiers) cannot be folded unambiguously, so it is refused with
+    a clear message rather than silently dropping one of them.
+    """
+    out: dict[str, Column] = {}
+    for c in columns:
+        fold = c.name.casefold()
+        if fold in out:
+            raise ValueError(
+                f"[side {side}] {table} has two columns that differ only in "
+                f"case: {out[fold].name!r} and {c.name!r}. parity matches "
+                f"columns case-insensitively across engines and cannot tell "
+                f"these apart - rename or quote one, or diff a view that does."
+            )
+        out[fold] = c
+    return out
+
+
 def _resolve_key(
     key: str | Sequence[str],
     cols_a: dict[str, Column],
@@ -149,22 +177,27 @@ def _resolve_key(
 
     Returns one spec per side. They agree on shape but hold each side's own
     `Column` objects, because a column can be `text` on one side and
-    `varchar` on the other and each dialect renders its own.
+    `varchar` on the other and each dialect renders its own - and the key can
+    be `ID` on one side and `id` on the other, since `--key` is one name that
+    has to resolve against whatever case each engine stored.
+
+    `cols_a` and `cols_b` are keyed by case-folded name (see `_fold_columns`),
+    so the same `--key id` finds `id` on PostgreSQL and `ID` on Snowflake.
     """
     names = [key] if isinstance(key, str) else list(dict.fromkeys(key))
     if not names:
         raise ValueError("--key needs at least one column")
 
     for side, table, cols in (("A", a_table, cols_a), ("B", b_table, cols_b)):
-        missing = [n for n in names if n not in cols]
+        missing = [n for n in names if n.casefold() not in cols]
         if missing:
             raise ValueError(
                 f"[side {side}] key column(s) {missing} not in {table}. "
-                f"Columns are: {sorted(cols)}"
+                f"Columns are: {sorted(c.name for c in cols.values())}"
             )
 
-    a_key = tuple(cols_a[n] for n in names)
-    b_key = tuple(cols_b[n] for n in names)
+    a_key = tuple(cols_a[n.casefold()] for n in names)
+    b_key = tuple(cols_b[n.casefold()] for n in names)
 
     # Hash unless it is one integer column on both sides. A single-column key
     # that is integer on one side and text on the other has to be hashed too,
@@ -194,21 +227,29 @@ def _resolve_key(
 def _select_columns(
     cols_a: dict[str, Column],
     cols_b: dict[str, Column],
-    key_names: Sequence[str],
+    key_folds: set[str],
     columns: Sequence[str] | None,
     exclude: Sequence[str],
     warnings: list[str],
 ) -> list[str]:
     """Decide which columns to compare, explaining anything dropped.
 
+    `cols_a`/`cols_b` are keyed by case-folded name and the returned list is
+    folded names too, so matching is case-insensitive across engines (see
+    `_fold_columns`); the caller maps each folded name back to that side's real
+    `Column`. Messages echo the user's own tokens, or side A's stored name, so
+    a folded lookup never leaks a lower-cased identifier back at the reader.
+
     Key columns are never compared: they are how rows are matched up, not
     something compared between them.
     """
-    keys = set(key_names)
-    both = (set(cols_a) & set(cols_b)) - keys
-    excluded = set(exclude)
+    both = (set(cols_a) & set(cols_b)) - key_folds
+    excluded = {e.casefold() for e in exclude}
 
-    unknown_exclude = excluded - set(cols_a) - set(cols_b)
+    unknown_exclude = [
+        e for e in dict.fromkeys(exclude)
+        if e.casefold() not in cols_a and e.casefold() not in cols_b
+    ]
     if unknown_exclude:
         warnings.append(
             f"--exclude named columns that exist on neither side: "
@@ -217,13 +258,19 @@ def _select_columns(
 
     shared = sorted(both - excluded)
     if columns:
-        requested = list(dict.fromkeys(columns))  # de-duplicate, keep order
-        nowhere = [c for c in requested if c not in cols_a and c not in cols_b]
-        one_side = [c for c in requested if c not in nowhere and c not in both]
-        dropped = [c for c in requested if c in excluded]
+        # Fold for matching, but keep the first spelling the user gave each
+        # column so error messages read back their own words, not a fold.
+        token: dict[str, str] = {}
+        for c in columns:
+            token.setdefault(c.casefold(), c)
+        req = list(token)  # folded, de-duplicated, order kept
+        nowhere_folds = {f for f in req if f not in cols_a and f not in cols_b}
+        nowhere = [token[f] for f in req if f in nowhere_folds]
+        one_side = [token[f] for f in req if f not in nowhere_folds and f not in both]
+        dropped = [token[f] for f in req if f in excluded]
         # Order matters: key columns are present on both sides but excluded
         # from `both`, so they would otherwise be misreported as one-sided.
-        if named_keys := [c for c in requested if c in keys]:
+        if named_keys := [token[f] for f in req if f in key_folds]:
             raise ValueError(
                 f"--columns named the key column(s) {named_keys}; the key is "
                 f"how rows are matched up, not something compared between them"
@@ -238,26 +285,28 @@ def _select_columns(
             raise ValueError(
                 f"--columns and --exclude both name: {dropped}"
             )
-        shared = [c for c in shared if c in set(requested)]
+        shared = [f for f in shared if f in set(req)]
 
-    for side, only in (
-        ("A", sorted(set(cols_a) - set(cols_b) - keys)),
-        ("B", sorted(set(cols_b) - set(cols_a) - keys)),
+    for side, cols, only in (
+        ("A", cols_a, sorted(set(cols_a) - set(cols_b) - key_folds)),
+        ("B", cols_b, sorted(set(cols_b) - set(cols_a) - key_folds)),
     ):
         if only:
-            warnings.append(f"not compared, present only on side {side}: {only}")
+            names = sorted(cols[f].name for f in only)
+            warnings.append(f"not compared, present only on side {side}: {names}")
 
     # A column whose logical type differs between sides renders through a
     # different canonical encoding, so every row would report as changed. That
     # looks like a catastrophic data difference but is really a schema
     # difference, so name it explicitly.
-    for name in shared:
-        ta, tb = cols_a[name].logical_type, cols_b[name].logical_type
+    for f in shared:
+        name = cols_a[f].name
+        ta, tb = cols_a[f].logical_type, cols_b[f].logical_type
         if ta is tb or {ta, tb} <= _NUMERIC_EQUIVALENT:
             continue
         warnings.append(
-            f"column {name!r} is {cols_a[name].raw_type or ta.value} on side A "
-            f"but {cols_b[name].raw_type or tb.value} on side B; values are "
+            f"column {name!r} is {cols_a[f].raw_type or ta.value} on side A "
+            f"but {cols_b[f].raw_type or tb.value} on side B; values are "
             f"compared as text and will very likely all differ"
         )
 
@@ -267,21 +316,21 @@ def _select_columns(
     # are pinned to UTC, so a migration that stored UTC compares clean. One
     # that stored local wall-clock reports *every* row as different, and
     # without this line there is nothing pointing at which axis to look along.
-    for name in shared:
-        aware_a = _is_tz_aware(cols_a[name])
-        if aware_a is _is_tz_aware(cols_b[name]):
+    for f in shared:
+        aware_a = _is_tz_aware(cols_a[f])
+        if aware_a is _is_tz_aware(cols_b[f]):
             continue
         aware, naive = ("A", "B") if aware_a else ("B", "A")
         warnings.append(
-            f"column {name!r} is timezone-aware on side {aware} but not on "
-            f"side {naive}; both are read in UTC, so a migration that stored "
-            f"local wall-clock time rather than UTC will show every row as "
-            f"different"
+            f"column {cols_a[f].name!r} is timezone-aware on side {aware} but "
+            f"not on side {naive}; both are read in UTC, so a migration that "
+            f"stored local wall-clock time rather than UTC will show every row "
+            f"as different"
         )
 
     unknown = sorted(
-        {n for n in shared if cols_a[n].logical_type is LogicalType.UNKNOWN}
-        | {n for n in shared if cols_b[n].logical_type is LogicalType.UNKNOWN}
+        {cols_a[f].name for f in shared if cols_a[f].logical_type is LogicalType.UNKNOWN}
+        | {cols_a[f].name for f in shared if cols_b[f].logical_type is LogicalType.UNKNOWN}
     )
     if unknown:
         warnings.append(
@@ -343,8 +392,15 @@ def diff(
             return _gather(fa, fb)
 
         cols_a_list, cols_b_list = both("columns")
-        cols_a = {c.name: c for c in cols_a_list}
-        cols_b = {c.name: c for c in cols_b_list}
+        # Match identifiers case-insensitively across the two sides. Engines
+        # fold unquoted names differently - Snowflake upper-cases, PostgreSQL
+        # and DuckDB lower-case - so a Postgres `amount` and its Snowflake
+        # `AMOUNT` are the same column and must line up, or the headline use
+        # case (diffing a table against its migration) finds no shared columns
+        # and no usable key. The map is keyed by the folded name; each side
+        # keeps its own Column, with its real stored name, for quoting in SQL.
+        cols_a = _fold_columns(cols_a_list, "A", a_table)
+        cols_b = _fold_columns(cols_b_list, "B", b_table)
         # Introspection is metadata, not a scan; do not inflate the query count
         # users read as "how much work did this cost".
         stats.queries -= 2
@@ -352,12 +408,13 @@ def diff(
         key_a, key_b = _resolve_key(
             key, cols_a, cols_b, a_table, b_table, warnings
         )
+        key_folds = {c.name.casefold() for c in key_a.columns}
 
         shared = _select_columns(
-            cols_a, cols_b, key_a.names, columns, exclude, warnings
+            cols_a, cols_b, key_folds, columns, exclude, warnings
         )
-        a_cols = [cols_a[c] for c in shared]
-        b_cols = [cols_b[c] for c in shared]
+        a_cols = [cols_a[f] for f in shared]
+        b_cols = [cols_b[f] for f in shared]
 
         ks_a, ks_b = both("key_stats", key_a, _args_b=(key_b,))
 

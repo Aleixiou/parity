@@ -76,10 +76,14 @@ The foundation of the whole tool: fold canonical row text into an integer that
 | PostgreSQL | `('x' \|\| substr(md5(<text>), 1, 15))::bit(60)::bigint` |
 | DuckDB | `cast(('0x' \|\| substr(md5(<text>), 1, 15)) as bigint)` |
 | MySQL | `cast(conv(substr(md5(<text>), 1, 15), 16, 10) as unsigned)` |
+| Snowflake | `floor(md5_number_upper64(<text>) / 16)` |
 
-All three return `648541476951500027` for input `'abc'` - through three
-different casts (bit-cast, hex-cast, CONV), which is exactly why a test pins
-the constant on each.
+All four return `648541476951500027` for input `'abc'` - through four different
+paths (bit-cast, hex-cast, CONV, and Snowflake's top-64-bits-then-drop-4), which
+is exactly why a test pins the constant on each. Snowflake has neither a bit
+cast nor `conv`, but `md5_number_upper64` gives the top 64 bits of the digest as
+a number and `floor(.../16)` drops the low 4, leaving the same 60-bit prefix -
+verified live, not just from the docs.
 
 **Why 15 hex characters (60 bits) and not 16.** 60 bits is the widest MD5 prefix
 that both engines render as the same *positive* signed 64-bit integer. At 16
@@ -170,11 +174,27 @@ on PostgreSQL, `main` on DuckDB.
 
 Both engines expose `information_schema.columns` identically enough that
 `columns()` lives on the base class; a dialect only declares its
-`default_schema`. **Identifier lookup is exact and case-sensitive**, because
-identifiers are always quoted — which is right, but unquoted SQL gets folded to
-lower case by the server, so `--a-table Orders` against a table stored as
-`orders` is an easy mistake. The "table not found" error therefore runs one
-case-insensitive follow-up query and names the near miss.
+`default_schema`.
+
+**Table lookup is exact and case-sensitive**, because the table name is quoted
+into SQL and is a *per-side* argument the user gives for each engine — so it
+must match that engine's stored case. Unquoted SQL folds to lower case on
+PostgreSQL/DuckDB and to UPPER case on Snowflake, so `--a-table Orders` against
+a table stored as `orders` is an easy mistake; the "table not found" error
+therefore runs one case-insensitive follow-up query and names the near miss.
+
+**Key and column *matching* is case-insensitive**, and this is not optional.
+`--key` is one name applied to both sides, and the shared-column set is the
+intersection of two schemas — but a Postgres table stores `id`, `amount` while
+its Snowflake migration stores `ID`, `AMOUNT`, and no single `--key` value and
+no exact-string intersection can bridge that. So `engine.py` folds every
+identifier (`_fold_columns`, `str.casefold`) for *matching* only, while each
+side keeps its own `Column` with its real stored name for *quoting* — the
+lower-casing never reaches the SQL. Same-case schemas are unaffected (folding
+is identity), so no existing checksum moves; a table carrying two columns that
+differ only in case (possible only via quoted identifiers) is refused, because
+it cannot be folded unambiguously. Differences are reported under side A's
+stored spelling.
 
 ### 4.5 Portability traps already discovered
 

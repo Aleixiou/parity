@@ -884,3 +884,54 @@ def test_identity_and_bucket_are_different_expressions_when_hashed():
     assert d.key_bucket(text) != d.key_identity(text)
     assert "md5" in d.key_bucket(text)
     assert "md5" not in d.key_identity(text)
+
+
+# ---------------------------------------------------------------------------
+# Case-insensitive identifier matching across engines.
+# ---------------------------------------------------------------------------
+
+
+def _cased(names, rows, key_name, side):
+    """A fake side whose key and columns carry the given (cased) names."""
+    cols = [Column(n, LogicalType.STRING, "varchar") for n in names]
+    return FakeDialect(
+        DictTable(cols, dict(rows)),
+        side=side,
+        key_type_override=Column(key_name, LogicalType.INTEGER, "bigint"),
+    )
+
+
+def test_columns_and_key_match_across_engines_that_fold_case_differently():
+    """Snowflake upper-cases unquoted identifiers; PostgreSQL and DuckDB
+    lower-case them. The same column and key must line up across the two sides
+    regardless of case, or a table and its migration would share no columns and
+    no usable key - the headline comparison this tool exists for.
+    """
+    rows = {1: ("10", "ok"), 2: ("20", "paid"), 3: ("30", "void")}
+    upper = _cased(["AMOUNT", "STATUS"], rows, "ID", "A")   # Snowflake-style
+    lower = _cased(["amount", "status"], rows, "id", "B")   # Postgres-style
+
+    # Identical data, differently-cased identifiers -> identical, zero download.
+    same = diff(upper, lower, "t", "t", "id")
+    assert same.identical, same.diffs
+    assert same.stats.rows_downloaded == 0
+
+    # A planted change is still found, and the key resolves even when --key is
+    # given in yet another case than either side stores.
+    changed_lower = _cased(["amount", "status"], {**rows, 2: ("999", "paid")}, "id", "B")
+    changed = diff(upper, changed_lower, "t", "t", "Id")
+    assert [(d.key, d.kind) for d in changed.diffs] == [(2, "different")]
+    # The differing column is named as side A stores it.
+    assert changed.diffs[0].columns == ["AMOUNT"]
+
+
+def test_two_columns_differing_only_in_case_are_refused():
+    """A table with `Col` and `col` cannot be folded unambiguously, so parity
+    refuses it with a clear message rather than silently dropping one.
+    """
+    cols = [Column("Amount", LogicalType.STRING, "varchar"),
+            Column("amount", LogicalType.STRING, "varchar")]
+    a = FakeDialect(DictTable(cols, {1: ("a", "b")}), side="A")
+    b = FakeDialect(DictTable(list(COLS), {1: ("a", "b")}), side="B")
+    with pytest.raises(ValueError, match="differ only in case"):
+        diff(a, b, "t", "t", "id")
